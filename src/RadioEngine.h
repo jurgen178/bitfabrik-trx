@@ -32,7 +32,6 @@ private:
     VfoState  _memChannels[NUM_MEM_CHANNELS]; // Persistent memory slots
     uint32_t  _memRevision = 0;               // Incremented on every memStore()
     long _bandFreqs[6];                      // Per-band frequency memory
-    bool _bandModes[6];                      // Per-band mode memory
     bool _unlockedRange = false;             // Bypasses band limits (for GEN mode)
     int  _lastRelayBand = -1;                // Cache for I2C efficiency
 
@@ -105,10 +104,6 @@ public:
     const long* getBandFreqs() const
     {
         return _bandFreqs;
-    }
-    const bool* getBandModes() const
-    {
-        return _bandModes;
     }
 
     // ── Setters ──

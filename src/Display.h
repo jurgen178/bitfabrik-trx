@@ -52,8 +52,22 @@ struct UIState
  * ── App Mode Interface ──────────────────────────────────────────────────
  * Base class for different functional modes (Radio, Generator, etc.)
  */
+enum class DisplayMode {
+    Radio,
+    Generator,
+    Settings,
+    Rit,
+    Volume,
+    Power,
+    Mic
+};
+
 class AppMode
 {
+protected:
+    void _drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode = true);
+    void _drawFullPageHeader(const char* label, uint16_t color);
+
 public:
     virtual ~AppMode() {}
     virtual void onEnter() {}
@@ -67,8 +81,51 @@ public:
 };
 
 /**
+ * ── SPECIALIZED MODES ───────────────────────────────────────────────────
+ */
+
+class RitMode : public AppMode {
+public:
+    void render(bool force) override;
+    void handleTouch(int x, int y, bool longPress) override;
+    void onRotate(int delta) override;
+    const char* getName() override { return "RIT"; }
+};
+
+class ParamMode : public AppMode {
+protected:
+    void _drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color);
+public:
+    void handleTouch(int x, int y, bool longPress) override;
+    void onRotate(int delta) override;
+};
+
+class VolumeMode : public ParamMode {
+public:
+    void render(bool force) override;
+    void onRotate(int delta) override;
+    void onButtonShort() override;
+    const char* getName() override { return "VOL"; }
+};
+
+class PowerMode : public ParamMode {
+public:
+    void render(bool force) override;
+    void onRotate(int delta) override;
+    void onButtonShort() override;
+    const char* getName() override { return "PWR"; }
+};
+
+class MicMode : public ParamMode {
+public:
+    void render(bool force) override;
+    void onRotate(int delta) override;
+    void onButtonShort() override;
+    const char* getName() override { return "MIC"; }
+};
+
+/**
  * ── Display Controller ──────────────────────────────────────────────────
- * Manages the high-level UI logic and mode switching.
  */
 class DisplayController
 {
@@ -76,12 +133,18 @@ private:
     LGFX_Sprite _topCanvas;
     UIState _last;
     AppMode* _currentMode = nullptr;
+    AppMode* _previousMode = nullptr;
+    uint32_t _modeTimeout = 0;
     bool _initialized = false;
 
     // Mode instances
     class RadioMode* _radioMode;
     class GeneratorMode* _genMode;
     class SettingsMode* _settingsMode;
+    class RitMode* _ritMode;
+    class VolumeMode* _volMode;
+    class PowerMode* _pwrMode;
+    class MicMode* _micMode;
 
 public:
     DisplayController();
@@ -90,12 +153,11 @@ public:
     void update(bool force = false);
 
     // Mode Management
-    void setMode(const char* modeName);
+    void setMode(DisplayMode mode);
     AppMode* getCurrentMode() { return _currentMode; }
+    void checkTimeout();
 
-    // Internal components accessible by modes
     LGFX_Sprite& getCanvas() { return _topCanvas; }
-    void renderTopArea(bool force);
     UIState& getLastState() { return _last; }
 };
 

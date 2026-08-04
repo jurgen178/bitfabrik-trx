@@ -3,6 +3,7 @@
 #include "RadioEngine.h"
 #include "AudioManager.h"
 #include "SettingsManager.h"
+#include "Display.h"
 
 /**
  * ── TUNE HANDLER ──────────────────────────────────────────────────────────
@@ -202,6 +203,8 @@ EncoderManager::EncoderManager()
 
 void EncoderManager::setMode(EncoderMode mode)
 {
+    if (mode == _mode && _currentHandler) return;
+
     if (_currentHandler)
     {
         _currentHandler->onLeave();
@@ -212,21 +215,26 @@ void EncoderManager::setMode(EncoderMode mode)
     {
         case EncoderMode::Volume:
             _currentHandler = &_vol;
+            ui.setMode(DisplayMode::Volume);
             break;
         case EncoderMode::Power:
             _currentHandler = &_power;
+            ui.setMode(DisplayMode::Power);
             break;
         case EncoderMode::Mic:
             _currentHandler = &_mic;
+            ui.setMode(DisplayMode::Mic);
             break;
         case EncoderMode::Calibrate:
             _currentHandler = &_cal;
             break;
         case EncoderMode::Rit:
             _currentHandler = &_rit;
+            ui.setMode(DisplayMode::Rit);
             break;
         default:
             _currentHandler = &_tune;
+            ui.setMode(DisplayMode::Radio);
             break;
     }
 

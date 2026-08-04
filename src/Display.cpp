@@ -32,6 +32,218 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 
+// ── SHARED DRAWING TOOLS (AppMode) ──────────────────────────────────────────
+
+void AppMode::_drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode)
+{
+    canvas.fillSprite(TFT_BLACK);
+
+    // 1. Mode Flag (Top Right)
+    if (showMode) {
+        canvas.setFont(&fonts::FreeSans9pt7b);
+        canvas.setTextDatum(top_right);
+        canvas.setTextColor(0xB220); // Dimmed Amber
+        canvas.drawString(usb ? "USB" : "LSB", 460, 2);
+    }
+
+    // 2. 7-Segment Frequency Look
+    char mainBuf[16], subBuf[16];
+    snprintf(mainBuf, sizeof(mainBuf), "%ld.%03ld", freq / 1000000, (freq % 1000000) / 1000);
+    snprintf(subBuf, sizeof(subBuf), ".%03ld", freq % 1000);
+
+    canvas.setFont(&fonts::Font7);
+    canvas.setTextSize(1.0);
+    int mainW = canvas.textWidth(mainBuf);
+    canvas.setTextSize(0.6);
+    int subW = canvas.textWidth(subBuf);
+
+    canvas.setFont(&fonts::FreeSans12pt7b);
+    canvas.setTextSize(1.0);
+    int mhzW = canvas.textWidth(" MHz");
+
+    int totalW = mainW + subW + mhzW;
+    int startX = (464 - totalW) / 2;
+
+    canvas.setTextColor(TRX_AMBER);
+    canvas.setFont(&fonts::Font7);
+    canvas.setTextSize(1.0);
+    canvas.setTextDatum(top_left);
+    canvas.drawString(mainBuf, startX, 10);
+
+    canvas.setTextSize(0.6);
+    canvas.drawString(subBuf, startX + mainW, 10);
+
+    canvas.setFont(&fonts::FreeSans12pt7b);
+    canvas.setTextSize(1.0);
+    canvas.drawString(" MHz", startX + mainW + subW, 37);
+}
+
+void AppMode::_drawFullPageHeader(const char* label, uint16_t color)
+{
+    // Draw Static Frame
+    tft.drawRect(5, 5, 470, 310, color);
+
+    // Draw Title (Top Centered)
+    tft.setFont(nullptr);
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextDatum(middle_center);
+    tft.drawString(label, 240, 30);
+    tft.drawLine(10, 50, 470, 50, color);
+
+    // Draw standard BACK button
+    tft.fillRoundRect(350, 260, 110, 40, 4, TRX_BLUE);
+    tft.drawRoundRect(350, 260, 110, 40, 4, TFT_WHITE);
+    tft.setTextColor(TFT_WHITE);
+    tft.setTextSize(2);
+    tft.setTextDatum(middle_center);
+    tft.drawString("BACK", 405, 280);
+}
+
+// ── SPECIALIZED MODES IMPLEMENTATION ────────────────────────────────────────
+
+void RitMode::render(bool force)
+{
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        _drawFullPageHeader("RIT CONTROL", 0x07FF);
+        tft.setFont(nullptr);
+        tft.setTextSize(2);
+        tft.setTextColor(TFT_DARKGREY);
+        tft.setTextDatum(middle_center);
+        tft.drawString("Adjust receiver offset", 240, 85);
+    }
+
+    LGFX_Sprite& canvas = ui.getCanvas();
+    canvas.fillSprite(TFT_BLACK);
+
+    long offset = radio.getRitOffset();
+    char valStr[16];
+    snprintf(valStr, sizeof(valStr), "%ld", labs(offset));
+    const char* sign = (offset >= 0) ? "+" : "-";
+
+    canvas.setFont(&fonts::FreeSans18pt7b);
+    int w1 = canvas.textWidth("RIT: ");
+    int w2 = canvas.textWidth(sign);
+    int w4 = canvas.textWidth(" Hz");
+
+    canvas.setFont(&fonts::Font7);
+    canvas.setTextSize(0.7);
+    int w3 = canvas.textWidth(valStr);
+
+    int totalW = w1 + w2 + w3 + w4;
+    int startX = (464 - totalW) / 2;
+
+    canvas.setTextColor(0x07FF); // RIT Blue
+    canvas.setTextDatum(top_left);
+    canvas.setFont(&fonts::FreeSans18pt7b);
+    canvas.drawString("RIT: ", startX, 28);
+    canvas.drawString(" Hz", startX + w1 + w2 + w3, 28);
+
+    canvas.setTextDatum(middle_left);
+    canvas.drawString(sign, startX + w1, 23);
+
+    canvas.setTextDatum(top_left);
+    canvas.setFont(&fonts::Font7);
+    canvas.setTextSize(0.7);
+    canvas.drawString(valStr, startX + w1 + w2, 10);
+
+    canvas.pushSprite(8, 120); // Move down to avoid header flickering
+}
+
+void RitMode::handleTouch(int x, int y, bool longPress)
+{
+    // Back button hit-box
+    if (x > 350 && y > 260) {
+        radio.setRitEnabled(false);
+        ui.setMode(DisplayMode::Radio);
+    }
+}
+
+void RitMode::onRotate(int delta)
+{
+    radio.setRitOffset(radio.getRitOffset() + delta * 10);
+}
+
+void ParamMode::_drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color)
+{
+    canvas.fillSprite(TFT_BLACK);
+    canvas.setFont(&fonts::FreeSans18pt7b);
+    canvas.setTextColor(color);
+    canvas.setTextDatum(middle_center);
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d%%", val);
+    canvas.drawString(buf, 232, 25);
+
+    int barW = 300, barH = 8;
+    int barX = (464 - barW) / 2, barY = 50;
+    canvas.drawRect(barX, barY, barW, barH, TFT_WHITE);
+    canvas.fillRect(barX + 2, barY + 2, map(val, 0, 100, 0, barW - 4), barH - 4, color);
+
+    canvas.pushSprite(8, 120); // Move down to avoid header flickering
+}
+
+void ParamMode::handleTouch(int x, int y, bool longPress)
+{
+    if (x > 350 && y > 260) {
+        ui.setMode(DisplayMode::Radio);
+    }
+}
+
+void ParamMode::onRotate(int delta)
+{
+    // Activity reset logic handled in ui.setMode or encoder manager
+}
+
+void VolumeMode::render(bool force)
+{
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        _drawFullPageHeader("AUDIO VOLUME", TRX_BLUE);
+        tft.setFont(nullptr);
+        tft.setTextSize(2);
+        tft.setTextColor(TFT_DARKGREY);
+        tft.setTextDatum(middle_center);
+        tft.drawString("Adjust output level", 240, 85);
+    }
+    _drawBar(ui.getCanvas(), "AUDIO VOLUME", audio.getVolume(), TRX_BLUE);
+}
+void VolumeMode::onButtonShort() { ui.setMode(DisplayMode::Power); }
+void VolumeMode::onRotate(int delta) { audio.setVolume(audio.getVolume() + delta); ui.setMode(DisplayMode::Volume); }
+
+void PowerMode::render(bool force)
+{
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        _drawFullPageHeader("TRANSMIT POWER", TFT_RED);
+        tft.setFont(nullptr);
+        tft.setTextSize(2);
+        tft.setTextColor(TFT_DARKGREY);
+        tft.setTextDatum(middle_center);
+        tft.drawString("Adjust PA drive level", 240, 85);
+    }
+    _drawBar(ui.getCanvas(), "TRANSMIT POWER", audio.getPaPower(), TFT_RED);
+}
+void PowerMode::onButtonShort() { ui.setMode(DisplayMode::Radio); }
+void PowerMode::onRotate(int delta) { audio.setPaPower(audio.getPaPower() + delta); ui.setMode(DisplayMode::Power); }
+
+void MicMode::render(bool force)
+{
+    if (force) {
+        tft.fillScreen(TFT_BLACK);
+        _drawFullPageHeader("MIC GAIN", TRX_AMBER);
+        tft.setFont(nullptr);
+        tft.setTextSize(2);
+        tft.setTextColor(TFT_DARKGREY);
+        tft.setTextDatum(middle_center);
+        tft.drawString("Adjust microphone sensitivity", 240, 85);
+    }
+    _drawBar(ui.getCanvas(), "MIC GAIN", audio.getMicGain(), TRX_AMBER);
+}
+void MicMode::onButtonShort() { ui.setMode(DisplayMode::Radio); }
+void MicMode::onRotate(int delta) { audio.setMicGain(audio.getMicGain() + delta); ui.setMode(DisplayMode::Mic); }
+
 // ── BUTTON RENDERER ────────────────────────────────────────────────────────
 
 void Button::draw() const
@@ -109,14 +321,12 @@ class RadioMode : public AppMode
         _ctrlBtns[3].onTap = []() {
             bool s = !radio.isRitEnabled();
             radio.setRitEnabled(s);
-            encManager.setMode(s ? EncoderMode::Rit : EncoderMode::Tune);
+            if (s) ui.setMode(DisplayMode::Rit);
+            else ui.setMode(DisplayMode::Radio);
         };
-        _ctrlBtns[4].onTap = []() {
-            encManager.setMode(
-                encManager.getMode() == EncoderMode::Mic ? EncoderMode::Tune : EncoderMode::Mic);
-        };
-        _ctrlBtns[5].onTap = []() { ui.setMode("GEN"); };
-        _ctrlBtns[6].onTap = []() { ui.setMode("SETTINGS"); };
+        _ctrlBtns[4].onTap = []() { ui.setMode(DisplayMode::Mic); };
+        _ctrlBtns[5].onTap = []() { ui.setMode(DisplayMode::Generator); };
+        _ctrlBtns[6].onTap = []() { ui.setMode(DisplayMode::Settings); };
 
         // Memory buttons: 10 slots in one row beneath control buttons
         // Layout: x=11+i*46, y=272, w=44, h=32; gap=2px
@@ -233,11 +443,12 @@ public:
 
     void render(bool force) override
     {
-        ui.renderTopArea(force);
+        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb());
+        ui.getCanvas().pushSprite(8, 8);
         _updateButtons(force);
     }
 
-    void onButtonShort() override { encManager.cycleMode(); }
+    void onButtonShort() override { ui.setMode(DisplayMode::Volume); }
 
     void onButtonLong() override
     {
@@ -355,7 +566,8 @@ public:
 
     void render(bool force) override
     {
-        ui.renderTopArea(force);
+        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb(), false);
+        ui.getCanvas().pushSprite(8, 8);
 
         // Clean full-width EXIT button
         static bool drawn = false;
@@ -378,7 +590,7 @@ public:
         // Exit Button hit-box
         if (ty > 220 && ty < 280)
         {
-            ui.setMode("RADIO");
+            ui.setMode(DisplayMode::Radio);
         }
     }
 };
@@ -443,15 +655,18 @@ public:
             _drawTabButton(0, L_TAB_VOX, _currentTab == 0);
             _drawTabButton(1, L_TAB_TIME, _currentTab == 1);
 
+            tft.drawLine(10, 60, 470, 60, 0x4208); // Neutral divider line
+
             // Exit Button
             tft.fillRoundRect(350, 260, 110, 40, 4, TRX_BLUE);
+            tft.drawRoundRect(350, 260, 110, 40, 4, TFT_WHITE);
             tft.setTextColor(TFT_WHITE);
             tft.setTextSize(2);
             tft.setTextDatum(middle_center);
             tft.drawString("BACK", 405, 280);
 
             // Clear content area
-            tft.fillRect(10, 50, 460, 200, TFT_BLACK);
+            tft.fillRect(10, 65, 460, 190, TFT_BLACK);
         }
 
         if (_currentTab == 0) // VOX TAB
@@ -502,7 +717,7 @@ public:
     void handleTouch(int tx, int ty, bool longPress = false) override
     {
         // Exit
-        if (tx > 350 && ty > 260) { ui.setMode("RADIO"); return; }
+        if (tx > 350 && ty > 260) { ui.setMode(DisplayMode::Radio); return; }
 
         // Tab Switch (Check actual button boundaries)
         if (ty >= 10 && ty <= 45)
@@ -514,8 +729,8 @@ public:
         }
 
         // Content Interaction
-        int row = (ty - 50) / 50;
-        if (row >= 0 && row < 3)
+        int row = (ty - 80) / 50;
+        if (row >= 0 && row < 3 && ty >= 80)
         {
             if (_currentTab == 0) // VOX
             {
@@ -556,7 +771,7 @@ private:
 
     void _drawCheckboxRow(int row, String label, bool checked, bool focused)
     {
-        int y = 60 + row * 50;
+        int y = 85 + row * 50;
         uint16_t color = focused ? TRX_AMBER : TFT_DARKGREY;
 
         tft.setFont(nullptr);
@@ -584,7 +799,7 @@ private:
 
     void _drawParamRow(int row, String label, String val, bool focused, bool disabled = false)
     {
-        int y = 60 + row * 50;
+        int y = 85 + row * 50;
         uint16_t color = disabled ? 0x2104 : (focused ? TRX_AMBER : TFT_DARKGREY);
         uint16_t valColor = disabled ? 0x2104 : TFT_WHITE;
 
@@ -614,6 +829,10 @@ DisplayController::DisplayController() : _topCanvas(&tft)
     _radioMode = new RadioMode();
     _genMode   = new GeneratorMode();
     _settingsMode = new SettingsMode();
+    _ritMode   = new RitMode();
+    _volMode   = new VolumeMode();
+    _pwrMode   = new PowerMode();
+    _micMode   = new MicMode();
     _currentMode = _radioMode;
 }
 
@@ -624,31 +843,58 @@ void DisplayController::begin()
     _topCanvas.createSprite(464, 70);
     _topCanvas.setColorDepth(16);
     _initialized = true;
-    _currentMode->onEnter(); // Initialize default mode state (button layout etc.)
+    _currentMode->onEnter();
 }
 
-void DisplayController::setMode(const char* modeName)
+void DisplayController::setMode(DisplayMode mode)
 {
+    AppMode* nextMode = nullptr;
+    switch(mode)
+    {
+        case DisplayMode::Generator: nextMode = _genMode; break;
+        case DisplayMode::Settings:  nextMode = _settingsMode; break;
+        case DisplayMode::Rit:       nextMode = _ritMode; break;
+        case DisplayMode::Volume:    nextMode = _volMode; break;
+        case DisplayMode::Power:     nextMode = _pwrMode; break;
+        case DisplayMode::Mic:       nextMode = _micMode; break;
+        default:                     nextMode = _radioMode; break;
+    }
+
+    if (nextMode == _currentMode) {
+        // Refresh timeout if already in a param mode
+        if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
+            _modeTimeout = millis();
+        return;
+    }
+
     if (_currentMode)
         _currentMode->onLeave();
 
-    if (strcmp(modeName, "GEN") == 0)
-        _currentMode = _genMode;
-    else if (strcmp(modeName, "SETTINGS") == 0)
-        _currentMode = _settingsMode;
-    else
-        _currentMode = _radioMode;
-
+    _previousMode = _currentMode;
+    _currentMode = nextMode;
     _currentMode->onEnter();
-    notifyWebUpdate(); // Sync web immediately on mode change
+
+    // Synchronize Encoder Manager
+    if (mode == DisplayMode::Volume) encManager.setMode(EncoderMode::Volume);
+    else if (mode == DisplayMode::Power) encManager.setMode(EncoderMode::Power);
+    else if (mode == DisplayMode::Mic) encManager.setMode(EncoderMode::Mic);
+    else if (mode == DisplayMode::Rit) encManager.setMode(EncoderMode::Rit);
+    else if (mode == DisplayMode::Radio) encManager.setMode(EncoderMode::Tune);
+
+    if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
+        _modeTimeout = millis();
+    else
+        _modeTimeout = 0;
+
+    notifyWebUpdate();
     drawFullUI();
 }
 
 void DisplayController::drawFullUI()
 {
-    if (strcmp(_currentMode->getName(), "RADIO") == 0)
+    tft.fillScreen(TFT_BLACK);
+    if (_currentMode == _radioMode)
     {
-        tft.fillScreen(TFT_BLACK);
         tft.drawRect(5, 5, 470, 75, TRX_AMBER_LOW);
     }
     _currentMode->render(true);
@@ -656,135 +902,18 @@ void DisplayController::drawFullUI()
 
 void DisplayController::update(bool force)
 {
+    checkTimeout();
     _currentMode->render(force);
 }
 
-void DisplayController::renderTopArea(bool force)
+void DisplayController::checkTimeout()
 {
-    EncoderMode mode = encManager.getMode();
-    long freq = radio.getFrequency();
-    bool ritEn = radio.isRitEnabled();
-    long ritOff = radio.getRitOffset();
-    int vol = audio.getVolume();
-    int pwr = audio.getPaPower();
-    int mic = audio.getMicGain();
-    double bfo = radio.isUsb() ? radio.getBfoUsb() : radio.getBfoLsb();
-
-    if (!force && _last.mode == mode && _last.freq == freq && _last.ritEnabled == ritEn &&
-        _last.ritOffset == ritOff && _last.vol == vol && _last.pwr == pwr && _last.mic == mic && _last.bfo == bfo)
-        return;
-
-    _topCanvas.fillSprite(TFT_BLACK);
-
-    // RIT Corner Flag
-    if (ritEn && ritOff != 0)
+    if (_modeTimeout > 0 && millis() - _modeTimeout > 3000)
     {
-        _topCanvas.setFont(&fonts::FreeSans9pt7b);
-        _topCanvas.setTextDatum(top_left);
-        _topCanvas.setTextColor(0x07FF);
-        _topCanvas.drawString("RIT", 4, 2);
+        setMode(DisplayMode::Radio);
     }
-
-    // Main Values
-    _topCanvas.setTextDatum(middle_center);
-    char buf[32];
-    if (mode == EncoderMode::Volume || mode == EncoderMode::Power || mode == EncoderMode::Mic || mode == EncoderMode::Rit)
-    {
-        _topCanvas.setFont(&fonts::FreeSans18pt7b);
-        uint16_t barColor = TRX_AMBER;
-        int val = 0;
-
-        if (mode == EncoderMode::Rit)
-        {
-            _topCanvas.setTextColor(0x07FF);
-            snprintf(buf, sizeof(buf), "RIT: %+ld Hz", ritOff);
-        }
-        else if (mode == EncoderMode::Volume)
-        {
-            _topCanvas.setTextColor(TRX_BLUE);
-            snprintf(buf, sizeof(buf), "VOL: %d%%", vol);
-            barColor = TRX_BLUE;
-            val = vol;
-        }
-        else if (mode == EncoderMode::Power)
-        {
-            _topCanvas.setTextColor(TFT_RED);
-            snprintf(buf, sizeof(buf), "PWR: %d%%", pwr);
-            barColor = TFT_RED;
-            val = pwr;
-        }
-        else
-        {
-            _topCanvas.setTextColor(TRX_AMBER);
-            snprintf(buf, sizeof(buf), "MIC: %d%%", mic);
-            val = mic;
-        }
-
-        _topCanvas.drawString(buf, 232, 25);
-
-        // Draw Progress Bar on TFT
-        if (mode != EncoderMode::Rit)
-        {
-            int barW = 300;
-            int barH = 8;
-            int barX = (464 - barW) / 2;
-            int barY = 50;
-            _topCanvas.drawRect(barX, barY, barW, barH, TFT_WHITE);
-            _topCanvas.fillRect(barX + 2, barY + 2, map(val, 0, 100, 0, barW - 4), barH - 4, barColor);
-        }
-    }
-    else if (mode == EncoderMode::Calibrate)
-    {
-        _topCanvas.setTextColor(TRX_AMBER);
-        _topCanvas.setFont(&fonts::FreeSans12pt7b);
-        _topCanvas.drawString("BFO CALIBRATION", 232, 18);
-        _topCanvas.setFont(&fonts::FreeSans18pt7b);
-        snprintf(buf, sizeof(buf), "%.4f MHz", bfo / 1000000.0);
-        _topCanvas.drawString(buf, 232, 45);
-    }
-    else
-    {
-        // 7-Segment Technical Frequency Look
-        char mainBuf[16], subBuf[16];
-        snprintf(mainBuf, sizeof(mainBuf), "%ld.%03ld", freq / 1000000, (freq % 1000000) / 1000);
-        snprintf(subBuf, sizeof(subBuf), ".%03ld", freq % 1000);
-
-        // 1. Calculate Widths for exact centering
-        _topCanvas.setFont(&fonts::Font7);
-        _topCanvas.setTextSize(1.0);
-        int mainW = _topCanvas.textWidth(mainBuf);
-
-        _topCanvas.setTextSize(0.6); // Hz part is smaller
-        int subW = _topCanvas.textWidth(subBuf);
-
-        _topCanvas.setFont(&fonts::FreeSans12pt7b);
-        _topCanvas.setTextSize(1.0);
-        int mhzW = _topCanvas.textWidth(" MHz");
-
-        int totalW = mainW + subW + mhzW;
-        int startX = (464 - totalW) / 2;
-
-        // 2. Draw Main digits (Full size 7-segment)
-        _topCanvas.setTextColor(TRX_AMBER);
-        _topCanvas.setFont(&fonts::Font7);
-        _topCanvas.setTextSize(1.0);
-        _topCanvas.setTextDatum(top_left);
-        _topCanvas.drawString(mainBuf, startX, 10);
-
-        // 3. Draw Hz digits (Scaled 7-segment)
-        _topCanvas.setTextSize(0.6);
-        _topCanvas.drawString(subBuf, startX + mainW, 10);
-
-        // 4. Draw Unit (FreeSans)
-        _topCanvas.setFont(&fonts::FreeSans12pt7b);
-        _topCanvas.setTextSize(1.0);
-        _topCanvas.drawString(" MHz", startX + mainW + subW, 37);
-    }
-
-    _topCanvas.pushSprite(8, 8);
-    _last.mode = mode; _last.freq = freq; _last.ritEnabled = ritEn; _last.ritOffset = ritOff;
-    _last.vol = vol; _last.pwr = pwr; _last.mic = mic; _last.bfo = bfo;
 }
+
 
 /**
  * ── HELPER WRAPPER ────────────────────────────────────────────────────────
@@ -872,11 +1001,11 @@ void updateOled2()
           if (radio.isDstActive()) local += 3600;
 
           bool isRawUtc = (radio.getUtcOffset() == 0 && !radio.isDstActive());
-          display2.printf("%-10s %02d:%02d:%02d", isRawUtc ? "Zeit UTC:" : "Zeit:",
+          display2.printf("%s %02d:%02d:%02d", isRawUtc ? L_TIME_UTC : L_TIME,
                          hour(local), minute(local), second(local));
       }
       else
-          display2.printf("Digital: %s", digital.getMode() == 0 ? "Morse" : "RTTY");
+          display2.printf("%s %s", L_DIGITAL_MODE, digital.getMode() == 0 ? "Morse" : "RTTY");
 
       display2.setCursor(0, 23);
       display2.printf("IP: %s", network.getActiveIP().c_str());

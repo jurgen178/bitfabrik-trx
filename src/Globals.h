@@ -77,7 +77,7 @@ struct Band
   long        freqDefault;// Startfrequenz
   int         rxRelay;    // Physischer Slot (0-5) für Empfang
   int         txRelay;    // Physischer Slot (0-5) für Senden
-  bool        defaultUSB; // Seitenband-Präferenz
+  const bool  sideBand;   // true = USB, false = LSB (Read-Only)
   bool        enabled;    // Ob dieser Slot bestückt/aktiv ist
 };
 

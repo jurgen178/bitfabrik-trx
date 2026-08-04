@@ -858,7 +858,11 @@ void NetworkManager::_setupRoutes()
         bool handled = false;
         if (request->hasParam("ui_mode"))
         {
-            ui.setMode(request->getParam("ui_mode")->value().c_str());
+            String m = request->getParam("ui_mode")->value();
+            if (m == "GEN") ui.setMode(DisplayMode::Generator);
+            else if (m == "SETTINGS") ui.setMode(DisplayMode::Settings);
+            else if (m == "RIT") ui.setMode(DisplayMode::Rit);
+            else ui.setMode(DisplayMode::Radio);
             handled = true;
         }
         if (request->hasParam("freq"))

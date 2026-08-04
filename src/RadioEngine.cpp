@@ -7,7 +7,11 @@ RadioEngine radio;
 
 RadioEngine::RadioEngine()
 {
-    // Initial state set in header defaults
+    // Initialize band frequencies with defaults from Constants.cpp
+    for (int i = 0; i < NUM_BANDS; i++)
+    {
+        _bandFreqs[i] = BANDS[i].freqDefault;
+    }
 }
 
 void RadioEngine::updateLO()
@@ -67,13 +71,14 @@ void RadioEngine::selectBand(int idx)
       return;
   }
 
-  // Save current frequency/mode to band memory
+  // Save current frequency to band memory
   _bandFreqs[_band] = _freq;
-  _bandModes[_band] = _usb;
 
   _band = idx;
   _freq = _bandFreqs[idx];
-  _usb  = _bandModes[idx];
+
+  // ALWAYS use the sideband defined in the BANDS table (Source of Truth)
+  _usb  = BANDS[idx].sideBand;
 
   updateBandRelays();
   updateLO();
@@ -292,7 +297,6 @@ void RadioEngine::loadFromPreferences()
     char k[8];
     snprintf(k, 8, "f%d", i);
     _bandFreqs[i] = preferences.getLong(k, BANDS[i].freqDefault);
-    // Note: band modes could also be loaded if saved
   }
 }
 
