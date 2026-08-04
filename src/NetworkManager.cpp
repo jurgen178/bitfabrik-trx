@@ -2,14 +2,57 @@
 #include "RadioEngine.h"
 #include "AudioManager.h"
 #include "Display.h"
+#include "Time.h"
 #include "SettingsManager.h"
 #include "Hardware.h"
 #include "DigitalEngine.h"
 #include "EncoderActions.h"
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include "arduino_secrets.h"
 
 NetworkManager network;
+WiFiUDP ntpUDP;
+static const char* NTP_SERVER = "pool.ntp.org";
+
+// --- NTP & Time Support (from Gartenlampen project) ---
+
+unsigned long sendNTPpacket(IPAddress& address) {
+  byte packetBuffer[48];
+  memset(packetBuffer, 0, 48);
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;            // Stratum
+  packetBuffer[2] = 6;            // Polling Interval
+  packetBuffer[3] = 0xEC;         // Peer Clock Precision
+  ntpUDP.beginPacket(address, 123);
+  ntpUDP.write(packetBuffer, 48);
+  return ntpUDP.endPacket();
+}
+
+time_t getNTPTime() {
+  IPAddress ntpIP;
+  if (!WiFi.hostByName(NTP_SERVER, ntpIP)) return 0;
+
+  while (ntpUDP.parsePacket() > 0) ntpUDP.flush();
+  sendNTPpacket(ntpIP);
+
+  uint32_t beginWait = millis();
+  while (millis() - beginWait < 1500) {
+    int size = ntpUDP.parsePacket();
+    if (size >= 48) {
+      byte buf[48];
+      ntpUDP.read(buf, 48);
+      unsigned long highWord = word(buf[40], buf[41]);
+      unsigned long lowWord = word(buf[42], buf[43]);
+      time_t t = (highWord << 16 | lowWord) - 2208988800UL;
+
+      // Return RAW UTC time for internal system clock
+      return t;
+    }
+    delay(10);
+  }
+  return 0;
+}
 
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
@@ -287,12 +330,23 @@ const char index_html[] PROGMEM = R"rawliteral(
         // VOX Update
         const voxBtn = document.getElementById('vox_toggle');
         if (voxBtn && !isVoxThDragging && !isVoxDelDragging && (now - lastUserAction > 500)) {
-            voxBtn.innerText = data.vox_en ? "ON" : "OFF";
-            highlight('vox_toggle', data.vox_en);
+            const voxEnabled = data.vox_en;
+            voxBtn.innerText = voxEnabled ? "ON" : "OFF";
+            highlight('vox_toggle', voxEnabled);
+
             document.getElementById('vox_thresh_val').innerText = data.vox_thresh;
-            document.getElementById('vox_thresh_slider').value = data.vox_thresh;
+            const thSlider = document.getElementById('vox_thresh_slider');
+            thSlider.value = data.vox_thresh;
+            thSlider.disabled = !voxEnabled;
+            thSlider.style.opacity = voxEnabled ? "1" : "0.3";
+            document.getElementById('vox_thresh_val').style.opacity = voxEnabled ? "1" : "0.3";
+
             document.getElementById('vox_delay_val').innerText = data.vox_delay + "ms";
-            document.getElementById('vox_delay_slider').value = data.vox_delay;
+            const delSlider = document.getElementById('vox_delay_slider');
+            delSlider.value = data.vox_delay;
+            delSlider.disabled = !voxEnabled;
+            delSlider.style.opacity = voxEnabled ? "1" : "0.3";
+            document.getElementById('vox_delay_val').style.opacity = voxEnabled ? "1" : "0.3";
         }
 
         bandIds.forEach((id, idx) => highlight(id, data.band == idx));
@@ -604,6 +658,7 @@ void NetworkManager::begin()
 
     _setupRoutes();
     _server.begin();
+    ntpUDP.begin(8888);
 
     _lastStatsTime = millis();
 }
@@ -611,21 +666,31 @@ void NetworkManager::begin()
 void NetworkManager::process()
 {
     uint32_t startWork = micros();
-    unsigned long now = millis();
+    unsigned long nowMs = millis();
+    static unsigned long lastNtpSync = 0;
 
-    if (now - _lastWsCleanup > 2000)
+    if (WiFi.status() == WL_CONNECTED && (lastNtpSync == 0 || nowMs - lastNtpSync > 600000)) {
+        time_t t = getNTPTime();
+        if (t > 0) {
+            setTime(t);
+            lastNtpSync = nowMs;
+            Serial.println("NTP: Time synchronized");
+        }
+    }
+
+    if (nowMs - _lastWsCleanup > 2000)
     {
         _ws.cleanupClients();
-        _lastWsCleanup = now;
+        _lastWsCleanup = nowMs;
     }
 
     // Called only when woken by notifyWebUpdate() or 2s timeout — always broadcast.
     broadcastStatus();
 
     _workTimeAccum += (micros() - startWork);
-    if (now - _lastStatsTime > 1000)
+    if (nowMs - _lastStatsTime > 1000)
     {
-        g_cpuLoad0 = (_workTimeAccum * 100) / ((now - _lastStatsTime) * 1000);
+        g_cpuLoad0 = (_workTimeAccum * 100) / ((nowMs - _lastStatsTime) * 1000);
         if (WiFi.status() == WL_CONNECTED)
         {
             g_cpuLoad0 += 8;
@@ -635,7 +700,7 @@ void NetworkManager::process()
             g_cpuLoad0 = 100;
         }
         _workTimeAccum = 0;
-        _lastStatsTime = now;
+        _lastStatsTime = nowMs;
     }
 }
 

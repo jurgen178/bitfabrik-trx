@@ -41,6 +41,10 @@ private:
     int  _voxThreshold = 1000;               // ADC threshold (0-4095)
     int  _voxDelay = 500;                    // Hang time in ms
 
+    // ── Time & Location ──
+    int  _utcOffset = 1;                     // Hours relative to UTC (e.g. +1 for Germany)
+    bool _dstActive = true;                  // Whether Daylight Saving Time is currently active
+
 public:
     RadioEngine();
 
@@ -143,6 +147,12 @@ public:
     void setVoxThreshold(int val);
     int  getVoxDelay() const { return _voxDelay; }
     void setVoxDelay(int ms);
+
+    // ── Time & Location ──
+    int  getUtcOffset() const { return _utcOffset; }
+    void setUtcOffset(int hours);
+    bool isDstActive() const { return _dstActive; }
+    void setDstActive(bool active);
 
     // ── Logic Methods ──
     void updateLO();

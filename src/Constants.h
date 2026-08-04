@@ -93,6 +93,13 @@
   #define L_MAIL_BODY     "Inhalt..."
   #define L_SAVE_TO       "SICHERN IN"
   #define L_SICHERN       "Sichern"
+  #define L_TAB_VOX       "VOX"
+  #define L_TAB_TIME      "ZEIT"
+  #define L_VOX_ACTIVE    "VOX Aktiv"
+  #define L_VOX_THRESH    "VOX Pegel"
+  #define L_VOX_DELAY     "VOX Haltezeit"
+  #define L_UTC_OFFSET    "UTC Versatz"
+  #define L_DST           "Sommerzeit"
 #elif defined(LANG_EN)
   #define L_STARTUP_MSG   "--- BITFABRIK Transceiver Start ---"
   #define L_I2C_OK        "I2C initialized at 400kHz"
@@ -169,6 +176,13 @@
   #define L_MAIL_BODY     "Body..."
   #define L_SAVE_TO       "SAVE TO"
   #define L_SICHERN       "Store"
+  #define L_TAB_VOX       "VOX"
+  #define L_TAB_TIME      "TIME"
+  #define L_VOX_ACTIVE    "VOX Active"
+  #define L_VOX_THRESH    "VOX Threshold"
+  #define L_VOX_DELAY     "VOX Delay"
+  #define L_UTC_OFFSET    "UTC Offset"
+  #define L_DST           "Daylight Savings"
 #endif
 
 // ── PIN DEFINITIONS (Native ESP32 GPIOs) ──────────────────────────────────

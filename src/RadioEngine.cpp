@@ -243,6 +243,20 @@ void RadioEngine::setRitOffset(long offset)
     notifyWebUpdate();
 }
 
+void RadioEngine::setUtcOffset(int hours)
+{
+    _utcOffset = hours;
+    settings.setUpdated();
+    notifyWebUpdate();
+}
+
+void RadioEngine::setDstActive(bool active)
+{
+    _dstActive = active;
+    settings.setUpdated();
+    notifyWebUpdate();
+}
+
 void RadioEngine::loadFromPreferences()
 {
   _bfoUsb = preferences.getDouble("bfo_usb", 9001500.0);
@@ -266,6 +280,8 @@ void RadioEngine::loadFromPreferences()
   }
 
   _activeVfo = preferences.getInt("vfoActive", 0);
+  _utcOffset = preferences.getInt("utc_off", 1);
+  _dstActive = preferences.getBool("dst_act", true);
   VfoState& act = (_activeVfo == 0) ? _vfoA : _vfoB;
   _freq = act.freq;
   _band = act.band;
@@ -318,6 +334,15 @@ void RadioEngine::saveToPreferences()
   if (preferences.getInt("vfoActive", -1) != _activeVfo)
   {
       preferences.putInt("vfoActive", _activeVfo);
+  }
+
+  if (preferences.getInt("utc_off", 99) != _utcOffset)
+  {
+      preferences.putInt("utc_off", _utcOffset);
+  }
+  if (preferences.getBool("dst_act", !_dstActive) != _dstActive)
+  {
+      preferences.putBool("dst_act", _dstActive);
   }
 
   for (int i = 0; i < NUM_BANDS; i++)

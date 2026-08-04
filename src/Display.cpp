@@ -1,11 +1,36 @@
 #include "Display.h"
 #include "Hardware.h"
+#include "Time.h"
 #include "NetworkManager.h"
 #include "EncoderActions.h"
 #include "RadioEngine.h"
 #include "AudioManager.h"
 #include "DigitalEngine.h"
 #include <WiFi.h>
+
+/**
+ * ── LOVYANGFX FONT REFERENCE ──────────────────────────────────────────────
+ * Available fonts for use with tft.setFont() or Button::labelFont:
+ *
+ * 1. Standard Pixel Fonts (Fast, grid-based, scale with setTextSize):
+ *    - &fonts::Font0  (or nullptr) : Standard 6x8 GLCD font
+ *    - &fonts::Font2  : 5x7 small font
+ *    - &fonts::Font4  : 11x18 medium font
+ *    - &fonts::Font7  : 7-Segment digital font (Numbers only)
+ *    - &fonts::Font8  : Large 32x48 font (Numbers only)
+ *
+ * 2. GFX FreeFonts (Smooth, proportional, size in pt):
+ *    Families: FreeMono, FreeSans, FreeSerif
+ *    Styles:   [None] (Regular), Bold, Oblique, BoldOblique
+ *    Sizes:    9pt7b, 12pt7b, 18pt7b, 24pt7b
+ *
+ *    Examples:
+ *    - &fonts::FreeMono9pt7b        (Current default for small buttons)
+ *    - &fonts::FreeMonoBold18pt7b   (Current default for band buttons)
+ *    - &fonts::FreeSans12pt7b       (Used for "MHz" and small labels)
+ *    - &fonts::FreeSans24pt7b       (Used for main frequency)
+ * ──────────────────────────────────────────────────────────────────────────
+ */
 
 // ── BUTTON RENDERER ────────────────────────────────────────────────────────
 
@@ -294,9 +319,10 @@ public:
         tft.fillScreen(TFT_BLACK);
         tft.drawRect(5, 5, 470, 75, TFT_RED); // Red frame for warning
         tft.setTextColor(TFT_RED);
+        tft.setFont(nullptr); // Use System Font for consistency with EXIT button
         tft.setTextSize(2);
-        tft.setCursor(15, 305);
-        tft.print("! SIGNAL GENERATOR ACTIVE - PA DISABLED !");
+        tft.setTextDatum(middle_center);
+        tft.drawString("! SIGNAL GENERATOR ACTIVE - PA DISABLED !", 240, 150);
     }
 
     void onLeave() override
@@ -335,12 +361,14 @@ public:
         static bool drawn = false;
         if (force || !drawn)
         {
+            tft.setFont(nullptr); // Ensure default font for this mode
             tft.fillRoundRect(10, 220, 460, 60, 8, TFT_DARKGREY);
             tft.drawRoundRect(10, 220, 460, 60, 8, TFT_WHITE);
+
             tft.setTextColor(TFT_WHITE);
             tft.setTextSize(3);
-            tft.setCursor(160, 235);
-            tft.print("EXIT TO RADIO");
+            tft.setTextDatum(middle_center);
+            tft.drawString("EXIT TO RADIO", 240, 250);
             drawn = true;
         }
     }
@@ -363,13 +391,18 @@ public:
 class SettingsMode : public AppMode
 {
 private:
-    int _focusParam = 0; // 0=VOX En, 1=VOX Thresh, 2=VOX Delay
+    int _focusParam = 0; // Index relative to active tab
+    int _currentTab = 0; // 0=VOX, 1=TIME
+    int _rotaryAccum = 0; // "Gearbox" for sensitive parameters
 
     struct {
         bool voxEn = false;
         int  voxThresh = -1;
         int  voxDelay = -1;
+        int  utcOffset = -99;
+        bool dstActive = false;
         int  focus = -1;
+        int  tab = -1;
     } _localLast;
 
 public:
@@ -379,144 +412,195 @@ public:
     {
         tft.fillScreen(TFT_BLACK);
         _focusParam = 0;
-        _localLast.focus = -1; // Force redraw
+        _rotaryAccum = 0;
+        _localLast.tab = -1; // Force redraw
+        _localLast.focus = -1;
         encManager.setMode(EncoderMode::Tune); // Ensure we are not adjusting Vol/Power
     }
 
     void render(bool force) override
     {
         bool changed = force ||
+                      _localLast.tab != _currentTab ||
+                      _localLast.focus != _focusParam ||
                       _localLast.voxEn != radio.isVoxEnabled() ||
                       _localLast.voxThresh != radio.getVoxThreshold() ||
                       _localLast.voxDelay != radio.getVoxDelay() ||
-                      _localLast.focus != _focusParam;
+                      _localLast.utcOffset != radio.getUtcOffset() ||
+                      _localLast.dstActive != radio.isDstActive();
 
         if (!changed)
             return;
 
+        tft.setFont(nullptr);
+
         // Static frame and title
-        if (force)
+        if (force || _localLast.tab != _currentTab)
         {
             tft.drawRect(5, 5, 470, 310, TRX_AMBER_LOW);
-            tft.setTextColor(TFT_WHITE);
-            tft.setTextSize(2);
-            tft.setCursor(150, 15);
-            tft.print("SYSTEM SETTINGS");
+
+            // Draw Tabs
+            _drawTabButton(0, L_TAB_VOX, _currentTab == 0);
+            _drawTabButton(1, L_TAB_TIME, _currentTab == 1);
 
             // Exit Button
             tft.fillRoundRect(350, 260, 110, 40, 4, TRX_BLUE);
             tft.setTextColor(TFT_WHITE);
             tft.setTextSize(2);
-            tft.setCursor(375, 272);
-            tft.print("BACK");
+            tft.setTextDatum(middle_center);
+            tft.drawString("BACK", 405, 280);
+
+            // Clear content area
+            tft.fillRect(10, 50, 460, 200, TFT_BLACK);
         }
 
-        // Clear Selection Borders (prevents ghost borders)
-        for (int i=0; i<3; i++) {
-            if (_localLast.focus == i && _focusParam != i) {
-                tft.drawRect(195, 60 + i*50 - 8, 160, 35, TFT_BLACK);
-            }
+        if (_currentTab == 0) // VOX TAB
+        {
+            _drawCheckboxRow(0, L_VOX_ACTIVE, radio.isVoxEnabled(), _focusParam == 0);
+            _drawParamRow(1, L_VOX_THRESH, String(radio.getVoxThreshold()), _focusParam == 1, !radio.isVoxEnabled());
+            _drawParamRow(2, L_VOX_DELAY, String(radio.getVoxDelay()) + " ms", _focusParam == 2, !radio.isVoxEnabled());
+        }
+        else if (_currentTab == 1) // TIME TAB
+        {
+            _drawParamRow(0, L_UTC_OFFSET, (radio.getUtcOffset() >= 0 ? "+" : "") + String(radio.getUtcOffset()), _focusParam == 0);
+            _drawCheckboxRow(1, L_DST, radio.isDstActive(), _focusParam == 1);
         }
 
-        // VOX Enable
-        _drawCheckboxRow(0, "VOX Active", radio.isVoxEnabled(), _focusParam == 0);
-        // VOX Threshold
-        _drawParamRow(1, "VOX Threshold", String(radio.getVoxThreshold()), _focusParam == 1);
-        // VOX Delay
-        _drawParamRow(2, "VOX Delay", String(radio.getVoxDelay()) + " ms", _focusParam == 2);
-
-        // Update cache (at the very end to prevent flickering)
+        // Update cache
         _localLast.voxEn = radio.isVoxEnabled();
         _localLast.voxThresh = radio.getVoxThreshold();
         _localLast.voxDelay = radio.getVoxDelay();
+        _localLast.utcOffset = radio.getUtcOffset();
+        _localLast.dstActive = radio.isDstActive();
         _localLast.focus = _focusParam;
+        _localLast.tab = _currentTab;
     }
 
     void onRotate(int delta) override
     {
-        if (_focusParam == 1) // Threshold
+        if (_currentTab == 0) // VOX
         {
-            radio.setVoxThreshold(radio.getVoxThreshold() + delta * 10);
+            if (!radio.isVoxEnabled()) return;
+            if (_focusParam == 1) radio.setVoxThreshold(radio.getVoxThreshold() + delta * 10);
+            else if (_focusParam == 2) radio.setVoxDelay(radio.getVoxDelay() + delta * 50);
         }
-        else if (_focusParam == 2) // Delay
+        else if (_currentTab == 1) // TIME
         {
-            radio.setVoxDelay(radio.getVoxDelay() + delta * 50);
+            if (_focusParam == 0) {
+                _rotaryAccum += delta;
+                // Gear ratio: 4 ticks required for 1 hour change
+                if (abs(_rotaryAccum) >= 4) {
+                    int change = _rotaryAccum / 4;
+                    radio.setUtcOffset(constrain(radio.getUtcOffset() + change, -12, 14));
+                    _rotaryAccum %= 4;
+                }
+            }
         }
         g_guiNeedsUpdate = true;
     }
 
     void handleTouch(int tx, int ty, bool longPress = false) override
     {
+        // Exit
         if (tx > 350 && ty > 260) { ui.setMode("RADIO"); return; }
 
-        if (ty > 50 && ty < 100)
+        // Tab Switch (Check actual button boundaries)
+        if (ty >= 10 && ty <= 45)
         {
-            _focusParam = 0;
-            radio.setVoxEnabled(!radio.isVoxEnabled());
+            if (tx >= 10 && tx <= 105 && _currentTab != 0) { _currentTab = 0; _focusParam = 0; _rotaryAccum = 0; }
+            else if (tx >= 110 && tx <= 205 && _currentTab != 1) { _currentTab = 1; _focusParam = 0; _rotaryAccum = 0; }
+            g_guiNeedsUpdate = true;
+            return;
         }
-        else if (ty > 100 && ty < 150) _focusParam = 1;
-        else if (ty > 150 && ty < 200) _focusParam = 2;
+
+        // Content Interaction
+        int row = (ty - 50) / 50;
+        if (row >= 0 && row < 3)
+        {
+            if (_currentTab == 0) // VOX
+            {
+                if (row == 0) { radio.setVoxEnabled(!radio.isVoxEnabled()); _focusParam = 0; }
+                else if (radio.isVoxEnabled()) _focusParam = row;
+            }
+            else if (_currentTab == 1) // TIME
+            {
+                if (row == 0) { _focusParam = 0; _rotaryAccum = 0; }
+                else if (row == 1) { radio.setDstActive(!radio.isDstActive()); _focusParam = 1; }
+            }
+        }
 
         g_guiNeedsUpdate = true;
     }
 
     void onButtonShort() override
     {
-        if (_focusParam == 0)
-        {
-            radio.setVoxEnabled(!radio.isVoxEnabled());
-            g_guiNeedsUpdate = true;
-        }
+        if (_currentTab == 0 && _focusParam == 0) radio.setVoxEnabled(!radio.isVoxEnabled());
+        else if (_currentTab == 1 && _focusParam == 1) radio.setDstActive(!radio.isDstActive());
+        g_guiNeedsUpdate = true;
     }
 
 private:
+    void _drawTabButton(int idx, const char* label, bool active)
+    {
+        int x = 10 + idx * 100;
+        uint16_t color = active ? TRX_BLUE : 0x2104; // Blue for active tab
+        uint16_t textColor = TFT_WHITE;
+
+        tft.fillRoundRect(x, 10, 95, 35, 4, color);
+        tft.drawRoundRect(x, 10, 95, 35, 4, active ? TFT_WHITE : 0x4208);
+        tft.setTextColor(textColor);
+        tft.setTextSize(2);
+        tft.setTextDatum(middle_center);
+        tft.drawString(label, x + 47, 27);
+    }
+
     void _drawCheckboxRow(int row, String label, bool checked, bool focused)
     {
         int y = 60 + row * 50;
         uint16_t color = focused ? TRX_AMBER : TFT_DARKGREY;
 
+        tft.setFont(nullptr);
         tft.setTextSize(2);
-        tft.setTextColor(color, TFT_BLACK); // bg fills behind chars — no fillRect needed
-        tft.setCursor(20, y);
-        tft.print(label);
+        tft.setTextColor(color, TFT_BLACK);
+        tft.setTextDatum(middle_left);
+        tft.drawString(label, 20, y + 10);
 
-        // Draw Checkbox Container
-        int cbX = 200;
+        // Draw Checkbox Container (centered in row)
+        int cbX = 220;
         tft.drawRect(cbX, y - 5, 30, 30, TFT_WHITE);
         tft.fillRect(cbX + 2, y - 3, 26, 26, TFT_BLACK);
 
         if (checked)
         {
-            // Draw a proper checkmark using lines
             tft.drawLine(cbX + 5, y + 10, cbX + 12, y + 20, TFT_GREEN);
-            tft.drawLine(cbX + 6, y + 10, cbX + 13, y + 20, TFT_GREEN); // Thicker
+            tft.drawLine(cbX + 6, y + 10, cbX + 13, y + 20, TFT_GREEN);
             tft.drawLine(cbX + 12, y + 20, cbX + 25, y, TFT_GREEN);
-            tft.drawLine(cbX + 13, y + 20, cbX + 26, y, TFT_GREEN); // Thicker
+            tft.drawLine(cbX + 13, y + 20, cbX + 26, y, TFT_GREEN);
         }
 
-        // Selection Border (Always draw to clear or set)
         uint16_t borderColor = focused ? TRX_AMBER : TFT_BLACK;
-        tft.drawRect(195, y - 8, 160, 35, borderColor);
+        tft.drawRect(215, y - 8, 160, 35, borderColor);
     }
 
-    void _drawParamRow(int row, String label, String val, bool focused)
+    void _drawParamRow(int row, String label, String val, bool focused, bool disabled = false)
     {
         int y = 60 + row * 50;
-        uint16_t color = focused ? TRX_AMBER : TFT_DARKGREY;
+        uint16_t color = disabled ? 0x2104 : (focused ? TRX_AMBER : TFT_DARKGREY);
+        uint16_t valColor = disabled ? 0x2104 : TFT_WHITE;
 
+        tft.setFont(nullptr);
         tft.setTextSize(2);
-        tft.setTextColor(color, TFT_BLACK); // bg fills behind chars — no fillRect needed
-        tft.setCursor(20, y);
-        tft.print(label);
+        tft.setTextColor(color, TFT_BLACK);
+        tft.setTextDatum(middle_left);
+        tft.drawString(label, 20, y + 10);
 
-        // Pad to fixed width so shorter values overwrite longer old ones
-        tft.setTextColor(TFT_WHITE, TFT_BLACK);
-        tft.setCursor(200, y);
-        tft.printf("%-12s", val.c_str());
+        tft.setTextColor(valColor, TFT_BLACK);
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%-12s", val.c_str());
+        tft.drawString(buf, 220, y + 10);
 
-        // Selection Border (Always draw to clear or set)
-        uint16_t borderColor = focused ? TRX_AMBER : TFT_BLACK;
-        tft.drawRect(195, y - 8, 160, 35, borderColor);
+        uint16_t borderColor = (focused && !disabled) ? TRX_AMBER : TFT_BLACK;
+        tft.drawRect(215, y - 8, 160, 35, borderColor);
     }
 };
 
@@ -660,30 +744,41 @@ void DisplayController::renderTopArea(bool force)
     }
     else
     {
-        // Elegant Frequency
-        _topCanvas.setTextColor(TRX_AMBER);
+        // 7-Segment Technical Frequency Look
         char mainBuf[16], subBuf[16];
         snprintf(mainBuf, sizeof(mainBuf), "%ld.%03ld", freq / 1000000, (freq % 1000000) / 1000);
         snprintf(subBuf, sizeof(subBuf), ".%03ld", freq % 1000);
 
-        _topCanvas.setFont(&fonts::FreeSans24pt7b);
+        // 1. Calculate Widths for exact centering
+        _topCanvas.setFont(&fonts::Font7);
+        _topCanvas.setTextSize(1.0);
         int mainW = _topCanvas.textWidth(mainBuf);
-        _topCanvas.setFont(&fonts::FreeSans12pt7b);
+
+        _topCanvas.setTextSize(0.6); // Hz part is smaller
         int subW = _topCanvas.textWidth(subBuf);
-        int totalW = mainW + subW + _topCanvas.textWidth(" MHz");
+
+        _topCanvas.setFont(&fonts::FreeSans12pt7b);
+        _topCanvas.setTextSize(1.0);
+        int mhzW = _topCanvas.textWidth(" MHz");
+
+        int totalW = mainW + subW + mhzW;
         int startX = (464 - totalW) / 2;
 
-        // Main part (#ff6600)
+        // 2. Draw Main digits (Full size 7-segment)
         _topCanvas.setTextColor(TRX_AMBER);
-        _topCanvas.setFont(&fonts::FreeSans24pt7b);
+        _topCanvas.setFont(&fonts::Font7);
+        _topCanvas.setTextSize(1.0);
         _topCanvas.setTextDatum(top_left);
-        _topCanvas.drawString(mainBuf, startX, 17);
+        _topCanvas.drawString(mainBuf, startX, 10);
 
-        // Decimal and suffix
-        _topCanvas.setTextColor(TRX_AMBER);
+        // 3. Draw Hz digits (Scaled 7-segment)
+        _topCanvas.setTextSize(0.6);
+        _topCanvas.drawString(subBuf, startX + mainW, 10);
+
+        // 4. Draw Unit (FreeSans)
         _topCanvas.setFont(&fonts::FreeSans12pt7b);
-        _topCanvas.drawString(subBuf, startX + mainW, 20);
-        _topCanvas.drawString(" MHz", startX + mainW + subW, 33);
+        _topCanvas.setTextSize(1.0);
+        _topCanvas.drawString(" MHz", startX + mainW + subW, 37);
     }
 
     _topCanvas.pushSprite(8, 8);
@@ -769,7 +864,20 @@ void updateOled2()
       display2.setCursor(0, 0);
       display2.print("--- BITFABRIK TRX ---");
       display2.setCursor(0, 12);
-      display2.printf("Digital: %s", digital.getMode() == 0 ? "Morse" : "RTTY");
+
+      if (timeStatus() == timeSet)
+      {
+          time_t utc = now();
+          time_t local = utc + (radio.getUtcOffset() * 3600);
+          if (radio.isDstActive()) local += 3600;
+
+          bool isRawUtc = (radio.getUtcOffset() == 0 && !radio.isDstActive());
+          display2.printf("%-10s %02d:%02d:%02d", isRawUtc ? "Zeit UTC:" : "Zeit:",
+                         hour(local), minute(local), second(local));
+      }
+      else
+          display2.printf("Digital: %s", digital.getMode() == 0 ? "Morse" : "RTTY");
+
       display2.setCursor(0, 23);
       display2.printf("IP: %s", network.getActiveIP().c_str());
       display2.setCursor(0, 34);
