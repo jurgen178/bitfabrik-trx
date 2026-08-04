@@ -66,7 +66,7 @@ class AppMode
 {
 protected:
     void _drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode = true);
-    void _drawFullPageHeader(const char* label, uint16_t color);
+    void _drawFullPageHeader(const char* label, uint16_t color, bool showBackButton = true);
 
 public:
     virtual ~AppMode() {}

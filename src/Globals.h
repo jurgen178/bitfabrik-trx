@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoJson.h>
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 #include <Adafruit_MCP23X17.h>
@@ -70,14 +71,13 @@ public:
 
 struct Band
 {
-  const char* label;      // Anzeige-Name (z.B. "40m")
-  int         meter;      // Wellenlänge als Zahl (z.B. 40)
+  const char* name;       // Anzeige-Name (z.B. "40m")
   long        freqMin;    // Untere Grenze für diesen Filter
   long        freqMax;    // Obere Grenze für diesen Filter
   long        freqDefault;// Startfrequenz
   int         rxRelay;    // Physischer Slot (0-5) für Empfang
   int         txRelay;    // Physischer Slot (0-5) für Senden
-  const bool  sideBand;   // true = USB, false = LSB (Read-Only)
+  bool        sideBand;   // true = USB, false = LSB (Dynamic)
   bool        enabled;    // Ob dieser Slot bestückt/aktiv ist
 };
 
@@ -168,7 +168,7 @@ SWRResult readSWR();
 
 // ── Constant Arrays ────────────────────────────────────────────────────────
 
-extern const Band BANDS[];
+extern Band BANDS[]; // Now dynamic (loaded from JSON)
 extern const Preset PRESETS[6][3];
 extern const long STEPS[];
 

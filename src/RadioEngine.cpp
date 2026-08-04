@@ -2,6 +2,8 @@
 #include "Hardware.h"
 #include "Display.h"
 #include "SettingsManager.h"
+#include <ArduinoJson.h>
+#include <FFat.h>
 
 RadioEngine radio;
 
@@ -37,7 +39,7 @@ void RadioEngine::updateBandRelays()
 
     if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
     {
-        Serial.printf("MCP: Updating Band Filters for %s\n", BANDS[_band].label);
+        Serial.printf("MCP: Updating Band Filters for %s\n", BANDS[_band].name);
         int rxTarget = BANDS[_band].rxRelay;
         int txTarget = BANDS[_band].txRelay;
 
@@ -210,6 +212,63 @@ void RadioEngine::memDelete(int ch)
     g_guiNeedsUpdate = true;
     notifyWebUpdate();
   }
+}
+
+void RadioEngine::loadBandsFromJson()
+{
+    if (!FFat.exists("/bands.json")) return;
+
+    File file = FFat.open("/bands.json", "r");
+    if (!file) return;
+
+    DynamicJsonDocument doc(2048);
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+
+    if (error) {
+        Serial.println("JSON: Failed to parse bands.json");
+        return;
+    }
+
+    JsonArray array = doc.as<JsonArray>();
+    for (int i = 0; i < array.size() && i < NUM_BANDS; i++) {
+        JsonObject obj = array[i];
+        // Map JSON to BANDS array (which is now dynamic)
+        BANDS[i].name        = strdup(obj["id"] | BANDS[i].name);
+        BANDS[i].freqMin     = obj["min"] | BANDS[i].freqMin;
+        BANDS[i].freqMax     = obj["max"] | BANDS[i].freqMax;
+        BANDS[i].freqDefault = obj["def"] | BANDS[i].freqDefault;
+        BANDS[i].rxRelay     = obj["rx_filter"] | BANDS[i].rxRelay;
+        BANDS[i].txRelay     = obj["tx_filter"] | BANDS[i].txRelay;
+        BANDS[i].sideBand    = obj["usb"] | BANDS[i].sideBand;
+        BANDS[i].enabled     = obj["active"] | BANDS[i].enabled;
+    }
+    Serial.println("JSON: Band configuration loaded");
+}
+
+void RadioEngine::saveBandsToJson()
+{
+    DynamicJsonDocument doc(2048);
+    JsonArray array = doc.to<JsonArray>();
+
+    for (int i = 0; i < NUM_BANDS; i++) {
+        JsonObject obj = array.createNestedObject();
+        obj["id"]    = BANDS[i].name;
+        obj["min"]   = BANDS[i].freqMin;
+        obj["max"]   = BANDS[i].freqMax;
+        obj["def"]   = BANDS[i].freqDefault;
+        obj["rx_filter"] = BANDS[i].rxRelay;
+        obj["tx_filter"] = BANDS[i].txRelay;
+        obj["usb"]   = BANDS[i].sideBand;
+        obj["active"] = BANDS[i].enabled;
+    }
+
+    File file = FFat.open("/bands.json", "w");
+    if (file) {
+        serializeJson(doc, file);
+        file.close();
+        Serial.println("JSON: Band configuration saved");
+    }
 }
 
 void RadioEngine::setFrequency(long f)

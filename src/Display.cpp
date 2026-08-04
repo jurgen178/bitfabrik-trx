@@ -78,7 +78,7 @@ void AppMode::_drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool show
     canvas.drawString(" MHz", startX + mainW + subW, 37);
 }
 
-void AppMode::_drawFullPageHeader(const char* label, uint16_t color)
+void AppMode::_drawFullPageHeader(const char* label, uint16_t color, bool showBackButton)
 {
     // Draw Static Frame
     tft.drawRect(5, 5, 470, 310, color);
@@ -91,13 +91,15 @@ void AppMode::_drawFullPageHeader(const char* label, uint16_t color)
     tft.drawString(label, 240, 30);
     tft.drawLine(10, 50, 470, 50, color);
 
-    // Draw standard BACK button
-    tft.fillRoundRect(350, 260, 110, 40, 4, TRX_BLUE);
-    tft.drawRoundRect(350, 260, 110, 40, 4, TFT_WHITE);
-    tft.setTextColor(TFT_WHITE);
-    tft.setTextSize(2);
-    tft.setTextDatum(middle_center);
-    tft.drawString("BACK", 405, 280);
+    if (showBackButton) {
+        // Draw standard BACK button
+        tft.fillRoundRect(350, 260, 110, 40, 4, TRX_BLUE);
+        tft.drawRoundRect(350, 260, 110, 40, 4, TFT_WHITE);
+        tft.setTextColor(TFT_WHITE);
+        tft.setTextSize(2);
+        tft.setTextDatum(middle_center);
+        tft.drawString(L_BACK, 405, 280);
+    }
 }
 
 // ── SPECIALIZED MODES IMPLEMENTATION ────────────────────────────────────────
@@ -299,7 +301,7 @@ class RadioMode : public AppMode
             _bandBtns[i].y    = 90 + (i / 3) * 55;
             _bandBtns[i].w    = 145;
             _bandBtns[i].h    = 45;
-            _bandBtns[i].label        = BANDS[i].enabled ? BANDS[i].label : "---";
+            _bandBtns[i].label        = BANDS[i].enabled ? BANDS[i].name : "---";
             _bandBtns[i].disabled     = !BANDS[i].enabled;
             _bandBtns[i].labelFont    = &fonts::FreeMono18pt7b; // Large bold font for bands
             _bandBtns[i].colorInactive = 0x3186;
@@ -566,23 +568,28 @@ public:
 
     void render(bool force) override
     {
-        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb(), false);
-        ui.getCanvas().pushSprite(8, 8);
+        if (force) {
+            tft.fillScreen(TFT_BLACK);
+            _drawFullPageHeader(L_SIGNAL_GEN, TFT_RED, false);
 
-        // Clean full-width EXIT button
-        static bool drawn = false;
-        if (force || !drawn)
-        {
-            tft.setFont(nullptr); // Ensure default font for this mode
+            // Warning text above the large button
+            tft.setFont(nullptr);
+            tft.setTextSize(2);
+            tft.setTextColor(TFT_RED);
+            tft.setTextDatum(middle_center);
+            tft.drawString(L_PA_DISABLED, 240, 180);
+
+            // Large Exit Button
             tft.fillRoundRect(10, 220, 460, 60, 8, TFT_DARKGREY);
             tft.drawRoundRect(10, 220, 460, 60, 8, TFT_WHITE);
-
             tft.setTextColor(TFT_WHITE);
             tft.setTextSize(3);
             tft.setTextDatum(middle_center);
-            tft.drawString("EXIT TO RADIO", 240, 250);
-            drawn = true;
+            tft.drawString(L_BACK, 240, 250);
         }
+
+        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb(), false);
+        ui.getCanvas().pushSprite(8, 100);
     }
 
     void handleTouch(int tx, int ty, bool longPress = false) override
@@ -663,7 +670,7 @@ public:
             tft.setTextColor(TFT_WHITE);
             tft.setTextSize(2);
             tft.setTextDatum(middle_center);
-            tft.drawString("BACK", 405, 280);
+            tft.drawString(L_BACK, 405, 280);
 
             // Clear content area
             tft.fillRect(10, 65, 460, 190, TFT_BLACK);

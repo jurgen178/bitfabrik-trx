@@ -10,6 +10,7 @@
  * ──────────────────────────────────────────────────────────────────────────
  */
 
+#include <FFat.h>
 #include "Constants.h"
 #include "Globals.h"
 #include "Hardware.h"
@@ -70,6 +71,14 @@ void setup()
   Serial.begin(115200);
   delay(2000); // Give user time to open monitor
   Serial.println("\n\n" L_STARTUP_MSG);
+
+  // FFat Filesystem
+  Serial.println("FS: Initializing FFat...");
+  if (!FFat.begin(false)) {
+      Serial.println("FS: FFat mount failed. Formatting...");
+      FFat.begin(true);
+  }
+  Serial.println("FS: OK");
 
   Serial.println("I2C: Initializing...");
   Wire.begin();
@@ -170,6 +179,9 @@ void setup()
 
   Serial.println("Audio: Starting PWM...");
   audio.begin();
+
+  Serial.println("Radio: Loading dynamic configuration...");
+  radio.loadBandsFromJson();
 
   Serial.println("Radio: Setting default band...");
   ui.begin();

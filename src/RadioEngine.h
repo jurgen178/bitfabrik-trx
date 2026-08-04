@@ -162,6 +162,10 @@ public:
     void memRecall(int ch);
     void memDelete(int ch);
 
+    // Dynamic Configuration
+    void loadBandsFromJson();
+    void saveBandsToJson();
+
     // Persistence helpers (friend access for save/load)
     void loadFromPreferences();
     void saveToPreferences();

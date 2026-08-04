@@ -72,7 +72,7 @@ String TuneHandler::getDisplayLabel()
     }
 
     char buf[48];
-    snprintf(buf, sizeof(buf), "%s - %s S:%s", BANDS[radio.getBand()].label, radio.isUsb() ? "USB" : "LSB", stepBuf);
+    snprintf(buf, sizeof(buf), "%s - %s S:%s", BANDS[radio.getBand()].name, radio.isUsb() ? "USB" : "LSB", stepBuf);
     return String(buf);
 }
 

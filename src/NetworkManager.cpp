@@ -11,6 +11,10 @@
 #include <WiFiUdp.h>
 #include "arduino_secrets.h"
 
+#include "TransceiverEditorHtml.h"
+#include <FFat.h>
+#include <ArduinoJson.h>
+
 NetworkManager network;
 WiFiUDP ntpUDP;
 static const char* NTP_SERVER = "pool.ntp.org";
@@ -258,6 +262,9 @@ const char index_html[] PROGMEM = R"rawliteral(
       <div style="margin-top:15px">
         <div class="status-line"><span>VOX Delay (ms)</span><span id="vox_delay_val" style="color:var(--accent)">500ms</span></div>
         <input type="range" id="vox_delay_slider" class="slider" min="0" max="5000" step="50" oninput="setVoxDelay(this.value)">
+      </div>
+      <div style="margin-top:20px; border-top: 1px solid #2d3748; padding-top:15px; text-align:center">
+        <button class="btn" style="width:100%; background:#00aaff; color:white; font-weight:bold" onclick="location.href='/bands'">BAND TABELLE</button>
       </div>
     </div>
   </div>
@@ -712,7 +719,7 @@ void NetworkManager::broadcastStatus()
     json += "\"ui_mode\":\"" + String(ui.getCurrentMode()->getName()) + "\",";
     json += "\"freq\":" + String((long)radio.getFrequency()) + ",";
     json += "\"band\":" + String((int)radio.getBand()) + ",";
-    json += "\"band_name\":\"" + String(BANDS[radio.getBand()].label) + "\",";
+    json += "\"band_name\":\"" + String(BANDS[radio.getBand()].name) + "\",";
     json += "\"f_min\":" + String(radio.getMinFreq()) + ",";
     json += "\"f_max\":" + String(radio.getMaxFreq()) + ",";
     json += "\"usb\":" + String(radio.isUsb() ? "true" : "false") + ",";
@@ -802,6 +809,68 @@ void NetworkManager::_setupRoutes()
         request->send(200, "text/html; charset=utf-8", _instance->getIndexHtml());
     });
 
+    _server.on("/bands", HTTP_GET, [](AsyncWebServerRequest *request)
+    {
+        request->send(200, "text/html", CONFIG_EDITOR_HTML);
+    });
+
+    _server.on("/bands.json", HTTP_GET, [](AsyncWebServerRequest *request)
+    {
+        if (FFat.exists("/bands.json")) {
+            request->send(FFat, "/bands.json", "application/json");
+        } else {
+            // Generate from current BANDS array with pretty formatting
+            DynamicJsonDocument doc(2048);
+            JsonArray array = doc.to<JsonArray>();
+            for (int i = 0; i < NUM_BANDS; i++) {
+                JsonObject obj = array.createNestedObject();
+                obj["id"]    = BANDS[i].name;
+                obj["min"]   = BANDS[i].freqMin;
+                obj["max"]   = BANDS[i].freqMax;
+                obj["def"]   = BANDS[i].freqDefault;
+                obj["rx_filter"] = BANDS[i].rxRelay;
+                obj["tx_filter"] = BANDS[i].txRelay;
+                obj["usb"]   = BANDS[i].sideBand;
+                obj["active"] = BANDS[i].enabled;
+            }
+            String output;
+            serializeJsonPretty(doc, output);
+            request->send(200, "application/json", output);
+        }
+    });
+
+    _server.on("/bands.json", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            if (index == 0) request->_tempObject = new String();
+            String *buf = static_cast<String*>(request->_tempObject);
+            buf->concat((const char*)data, len);
+            if (index + len == total) {
+                File file = FFat.open("/bands.json", "w");
+                if (file) {
+                    file.print(*buf);
+                    file.close();
+                    request->send(200, "text/plain", "OK");
+                    delay(500);
+                    ESP.restart();
+                } else {
+                    request->send(500, "text/plain", "Failed to save file");
+                }
+                delete buf;
+            }
+    });
+
+    _server.on("/bands.json", HTTP_DELETE, [](AsyncWebServerRequest *request)
+    {
+        if (FFat.exists("/bands.json")) {
+            FFat.remove("/bands.json");
+            request->send(200, "text/plain", "Reset OK");
+            delay(500);
+            ESP.restart();
+        } else {
+            request->send(200, "text/plain", "No file to delete");
+        }
+    });
+
     _server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest *request)
     {
         String json;
@@ -810,7 +879,7 @@ void NetworkManager::_setupRoutes()
         json += "\"ui_mode\":\"" + String(ui.getCurrentMode()->getName()) + "\",";
         json += "\"freq\":" + String((long)radio.getFrequency()) + ",";
         json += "\"band\":" + String((int)radio.getBand()) + ",";
-        json += "\"band_name\":\"" + String(BANDS[radio.getBand()].label) + "\",";
+        json += "\"band_name\":\"" + String(BANDS[radio.getBand()].name) + "\",";
         json += "\"f_min\":" + String(radio.getMinFreq()) + ",";
         json += "\"f_max\":" + String(radio.getMaxFreq()) + ",";
         json += "\"usb\":" + String(radio.isUsb() ? "true" : "false") + ",";
@@ -1064,7 +1133,7 @@ static int getBandIndexByName(String name)
   name.toLowerCase();
   for (int i = 0; i < NUM_BANDS; i++)
   {
-    String bandName = String(BANDS[i].label);
+    String bandName = String(BANDS[i].name);
     bandName.toLowerCase();
     if (name == bandName)
     {
