@@ -29,7 +29,7 @@ void dds_pulse(int pin)
  */
 void dds_setFreq(double freq, int fqud)
 {
-  if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
     // Formula: FTW = (Freq * 2^32) / Reference_Clock
     uint32_t tw = (uint32_t)((freq / REF_FREQ) * 4294967296.0);
@@ -57,7 +57,7 @@ void dds_setFreq(double freq, int fqud)
  */
 void dds_reset()
 {
-  if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
     digitalWrite(DDS_RESET, HIGH);
     delayMicroseconds(5);
@@ -86,28 +86,22 @@ void setTxRx(bool tx)
 {
   g_tx = tx;
 
-  if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
-    if (tx)
+    if (g_mcpOk)
     {
-      mcp.digitalWrite(MCP_RELAY_TXRX, HIGH);
-      delay(15);
-      mcp.digitalWrite(MCP_PIN_PA_BIAS, HIGH);
+      // PA is only active if TX is requested AND we are NOT in Generator Mode (unlocked)
+      bool paState = tx && !radio.isUnlocked();
+      mcp.digitalWrite(MCP_TX_PA_ACTIVE, paState ? HIGH : LOW);
     }
-    else
-    {
-      mcp.digitalWrite(MCP_PIN_PA_BIAS, LOW);
-      delay(10);
-      mcp.digitalWrite(MCP_RELAY_TXRX, LOW);
-    }
+
+    // Re-latch band filter relays inside the same mutex block for stability
+    radio.refreshRelays();
+
     xSemaphoreGiveRecursive(g_hwMutex);
   }
 
-    // Re-latch band filter relays: relay coil inrush can cause I2C noise that
-    // corrupts the MCP shadow register when pins 6/7 and 0-5 share GPIOA.
-    radio.refreshRelays();
-
-    notifyWebUpdate();
+  notifyWebUpdate();
 }
 
 // ── VFO & STORAGE ─────────────────────────────────────────────────────────
@@ -140,18 +134,23 @@ SWRResult readSWR()
   uint32_t rSum = 0;
   uint32_t rssiSum = 0;
 
-  for (int i=0; i<SWR_SAMPLES; i++)
+  SWRResult res;
+
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
-      fSum += analogRead(PIN_SWR_FWD);
-      rSum += analogRead(PIN_SWR_REF);
-      rssiSum += analogRead(PIN_RSSI);
+    for (int i=0; i<SWR_SAMPLES; i++)
+    {
+        fSum += analogRead(PIN_SWR_FWD);
+        rSum += analogRead(PIN_SWR_REF);
+        rssiSum += analogRead(PIN_S_METER);
+    }
+    xSemaphoreGiveRecursive(g_hwMutex);
   }
 
   float vF = ((float)fSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
   float vR = ((float)rSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
   float vRSSI = ((float)rssiSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
 
-  SWRResult res;
   res.vFwd = compensateDiode(vF);
   res.vRef = compensateDiode(vR);
   res.rssi = vRSSI;
@@ -260,13 +259,19 @@ void IRAM_ATTR encISR()
 
 // ── TASK RADIO HELPERS ──────────────────────────────────────────────────
 
-static void handlePTT(unsigned long now, bool mcpPtt)
-{
-    static int pttC = 0;
-    static unsigned long lastKeyTime = 0;
-    static unsigned long lastVoxTrigger = 0;
+static int pttC = 0;
+static unsigned long lastKeyTime = 0;
+static unsigned long lastVoxTrigger = 0;
+static bool lastKeyTimeValid = false;
+static bool lastVoxTriggerValid = false;
 
-    bool rawP = (mcpPtt == LOW);
+void handlePTT(unsigned long now, bool mcpPtt)
+{
+    // 0. Generator Mode Bypass
+    if (radio.isUnlocked()) return;
+
+    // 1. Physical PTT logic with safety check (Avoid TX if MCP is disconnected/unstable)
+    bool rawP = (g_mcpOk && mcpPtt == LOW);
     if (rawP)
     {
         if (pttC < 5)
@@ -286,17 +291,21 @@ static void handlePTT(unsigned long now, bool mcpPtt)
         if (voxLevel > radio.getVoxThreshold())
         {
             lastVoxTrigger = now;
+            lastVoxTriggerValid = true;
         }
         // Safety: ensure triggered only if threshold is not zero
-        if (radio.getVoxThreshold() > 50 && (now - lastVoxTrigger < (unsigned long)radio.getVoxDelay()))
+        if (radio.getVoxThreshold() > 50 && lastVoxTriggerValid && (now - lastVoxTrigger < (unsigned long)radio.getVoxDelay()))
         {
             voxTriggered = true;
         }
     }
 
-    if (digital.isKeyed()) lastKeyTime = now;
+    if (digital.isKeyed()) {
+        lastKeyTime = now;
+        lastKeyTimeValid = true;
+    }
     // isBusy keeps TX on during inter-char/word gaps (which exceed CW_HANG_TIME)
-    bool shouldBeInTx = (pttC >= 4) || digital.isKeyed() || digital.isBusy() || voxTriggered || (now - lastKeyTime < CW_HANG_TIME);
+    bool shouldBeInTx = (pttC >= 4) || digital.isKeyed() || digital.isBusy() || voxTriggered || (lastKeyTimeValid && (now - lastKeyTime < CW_HANG_TIME));
 
     if (shouldBeInTx != g_tx)
     {
@@ -373,7 +382,17 @@ static void handleTouch(unsigned long now)
     static int touchX = 0, touchY = 0;
 
     int tx, ty;
-    bool isTouching = tft.getTouch(&tx, &ty);
+    bool isTouching = false;
+
+    // Crucial Sync-Fix: If we cannot acquire the hardware mutex immediately,
+    // we MUST abort this check completely and try again next cycle.
+    // Do NOT assume the user released their finger!
+    if (!xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(5)))
+    {
+        return;
+    }
+    isTouching = tft.getTouch(&tx, &ty);
+    xSemaphoreGiveRecursive(g_hwMutex);
 
     if (isTouching && !wasTouching)
     {
@@ -406,14 +425,20 @@ static void handleDisplayUpdates(unsigned long now)
     // 1. TFT Refresh (Throttled to ~16Hz for tuning smoothness)
     if (now - lastTftRefresh > 60)
     {
-        if (g_guiNeedsUpdate)
+        if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
         {
-            ui.update();
-            updateOled1();
-            notifyWebUpdate(); // Hardware state changed — keep web in sync
-            g_guiNeedsUpdate = false;
-            lastTftRefresh = now;
+            // Always check for mode timeouts (3s return to Radio Mode)
+            ui.checkTimeout();
+
+            if (g_guiNeedsUpdate.exchange(false))
+            {
+                ui.update();
+                updateOled1();
+                notifyWebUpdate(); // Hardware state changed — keep web in sync
+            }
+            xSemaphoreGiveRecursive(g_hwMutex);
         }
+        lastTftRefresh = now;
     }
 
     // 2. OLED1 (Fast Cycle)
@@ -471,9 +496,157 @@ static void handleSystemStats(unsigned long now, uint32_t startWork)
  * - Throttled hardware display refreshes (I2C protection).
  * ──────────────────────────────────────────────────────────────────────────
  */
+static void handleSyncState(unsigned long now)
+{
+    // 1. Command Processing (Read Targets from Web)
+    // We process this first to ensure hardware reacts to web commands immediately
+    if (g_sync.updatePending.exchange(false))
+    {
+        uint32_t mask = g_sync.updateMask.exchange(0);
+
+        if (mask & SYNC_FREQ)  radio.setFrequency(g_sync.targetFreq.load());
+        if (mask & SYNC_BAND)  radio.selectBand(g_sync.targetBand.load());
+        if (mask & SYNC_VFO)   radio.switchVfo(g_sync.targetVfo.load());
+        if (mask & SYNC_VFO_COPY) {
+            radio.vfoCopy();
+            g_sync.vfoCopyFlash = true;
+        }
+        if (mask & SYNC_RIT) {
+            radio.setRitEnabled(g_sync.currRitEn.load()); // curr holds the enable bit during command
+            radio.setRitOffset(g_sync.targetRitOffset.load());
+        }
+        if (mask & SYNC_STEP)  radio.setStepIdx(g_sync.targetStepIdx.load());
+        if (mask & SYNC_DIGI)  digital.setMode(g_sync.targetDigiMode.load());
+        if (mask & SYNC_VOL) {
+            audio.setVolume(g_sync.targetVol.load());
+            ui.setMode(DisplayMode::Volume);
+        }
+        if (mask & SYNC_PWR) {
+            audio.setPaPower(g_sync.targetPwr.load());
+            ui.setMode(DisplayMode::Power);
+        }
+        if (mask & SYNC_MIC) {
+            audio.setMicGain(g_sync.targetMic.load());
+            ui.setMode(DisplayMode::Mic);
+        }
+        if (mask & SYNC_VOX) {
+            // Check if this was a toggle (from web) or a specific update
+            // For now, if both target values are unchanged, it's a toggle
+            radio.setVoxEnabled(g_sync.currVoxEn.load());
+            radio.setVoxThreshold(g_sync.targetVoxThresh.load());
+            radio.setVoxDelay(g_sync.targetVoxDelay.load());
+        }
+        if (mask & SYNC_MEM_STORE)  radio.memStore(g_sync.targetVfo.load()); // reusing targetVfo for slot
+        if (mask & SYNC_MEM_RECALL) radio.memRecall(g_sync.targetVfo.load());
+
+        if (mask & SYNC_MODE) {
+            // We use targetStepIdx as a proxy for mode index to avoid another atomic
+            ui.setMode((DisplayMode)g_sync.targetStepIdx.load());
+        }
+
+        g_guiNeedsUpdate = true;
+    }
+
+    // 2. State Mirroring (Write current Hardware state to RAM for Web)
+    // We do this every cycle so the Web always has the latest data
+    long  f = radio.getFrequency();
+    int   b = radio.getBand();
+    bool  u = radio.isUsb();
+    int   v = radio.getActiveVfo();
+    bool  re = radio.isRitEnabled();
+    long  ro = radio.getRitOffset();
+    bool  ve = radio.isVoxEnabled();
+    int   vt = radio.getVoxThreshold();
+    int   vd = radio.getVoxDelay();
+    int   vol = audio.getVolume();
+    int   pwr = audio.getPaPower();
+    int   mic = audio.getMicGain();
+
+    int   mIdx = 0;
+    const char* mName = ui.getCurrentMode() ? ui.getCurrentMode()->getName() : "";
+    if (strcmp(mName, "GEN") == 0) mIdx = 1;
+    else if (strcmp(mName, "SETTINGS") == 0) mIdx = 2;
+    else if (strcmp(mName, "RIT") == 0) mIdx = 3;
+
+    bool changed = (f != g_sync.currFreq || b != g_sync.currBand || u != g_sync.currUsb ||
+                    v != g_sync.currVfo || re != g_sync.currRitEn || ro != g_sync.currRitOff ||
+                    ve != g_sync.currVoxEn || vt != g_sync.currVoxThresh || vd != g_sync.currVoxDelay ||
+                    vol != g_sync.currVol || pwr != g_sync.currPwr || mic != g_sync.currMic ||
+                    mIdx != g_sync.currModeIdx);
+
+    g_sync.currFreq = f;
+    g_sync.currBand = b;
+    g_sync.currUsb  = u;
+    g_sync.currVfo  = v;
+    g_sync.currRitEn = re;
+    g_sync.currRitOff = ro;
+    g_sync.currVoxEn = ve;
+    g_sync.currVoxThresh = vt;
+    g_sync.currVoxDelay = vd;
+    g_sync.currVol = vol;
+    g_sync.currPwr = pwr;
+    g_sync.currMic = mic;
+    g_sync.currModeIdx = mIdx;
+
+    g_sync.currMinFreq = radio.getMinFreq();
+    g_sync.currMaxFreq = radio.getMaxFreq();
+    g_sync.currStepVal = STEPS[radio.getStepIdx()];
+    g_sync.currDigiMode = digital.getMode();
+    g_sync.currBusy = digital.isBusy();
+    g_sync.currTx = g_tx.load();
+    g_sync.currMinFreq = radio.getMinFreq();
+    g_sync.currMaxFreq = radio.getMaxFreq();
+
+    // Mirror memory slots safely for tooltips
+    uint32_t currentMemRev = radio.getMemRevision();
+    if (currentMemRev != g_sync.memRevision.load()) {
+        const VfoState* mems = radio.getMemChannels();
+        for(int i=0; i<NUM_MEM_CHANNELS; i++) {
+            g_sync.memMirror[i].occ = mems[i].occupied;
+            g_sync.memMirror[i].freq = mems[i].freq;
+            g_sync.memMirror[i].band = mems[i].band;
+        }
+        g_sync.memRevision.store(currentMemRev);
+        changed = true; // Force a web update when memory changes
+    }
+
+    if (changed) {
+        g_lastActivityTime.store(now);
+        notifyWebUpdate();
+    }
+
+    // 3. Sensor Update (Metrics)
+    static unsigned long lastSensorUpdate = 0;
+    if (now - lastSensorUpdate > 100) // 10Hz is enough for SWR/RSSI
+    {
+        SWRResult m = readSWR();
+        g_sync.swr.store(m.swr);
+        g_sync.pwrW.store(m.powerW);
+        g_sync.rssi.store(m.rssi);
+        g_sync.sLevel.store(m.sLevel);
+        lastSensorUpdate = now;
+
+        // Signal present (> S1) counts as activity to keep S-Meter fluid
+        if (m.sLevel > 1) g_lastActivityTime.store(now);
+
+        notifyWebUpdate(); // Trigger web update for new SWR/RSSI
+    }
+}
+
 void TaskRadio(void *p)
 {
     g_guiNeedsUpdate = true;
+
+    // Initialize SyncState with current hardware values
+    g_sync.currFreq = radio.getFrequency();
+    g_sync.currBand = radio.getBand();
+    g_sync.currUsb  = radio.isUsb();
+    g_sync.currVol  = audio.getVolume();
+    g_sync.currPwr  = audio.getPaPower();
+    g_sync.currMic  = audio.getMicGain();
+    g_sync.memRevision.store(0xFFFFFFFF); // Force first sync in handleSyncState
+    g_sync.updatePending = false;
+    g_sync.updateMask = 0;
 
     for (;;)
     {
@@ -482,7 +655,7 @@ void TaskRadio(void *p)
 
         // Single Point MCP Read
         bool mcpPtt = HIGH;
-        if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(5)))
+        if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
         {
             mcpPtt = mcp.digitalRead(MCP_PIN_PTT);
             xSemaphoreGiveRecursive(g_hwMutex);
@@ -492,6 +665,7 @@ void TaskRadio(void *p)
         handleSoftKeying(mcpPtt);
         handleEncoder(now);
         handleTouch(now);
+        handleSyncState(now);
         handleDisplayUpdates(now);
         settings.process(); // Auto-save logic
         handleSystemStats(now, startWork);

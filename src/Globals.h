@@ -15,6 +15,7 @@
 #include <Adafruit_MCP23X17.h>
 #include <Preferences.h>
 #include <ESPAsyncWebServer.h>
+#include <atomic>
 #include "Constants.h"
 
 // ── LovyanGFX Driver Configuration (Hosyond 4.0" TN) ────────────────────────
@@ -105,6 +106,87 @@ struct SWRResult
   int   sLevel; // S-Unit (1-9)
 };
 
+/**
+ * ── DECOUPLED SYNC STATE ──────────────────────────────────────────────────
+ * Shared memory bridge between Network (Core 0) and Radio (Core 1).
+ * Prevents Bus conflicts by ensuring only Core 1 touches hardware.
+ * ──────────────────────────────────────────────────────────────────────────
+ */
+struct SyncState
+{
+    // ── Commands (Written by Web, Read by Radio) ──
+    std::atomic<long> targetFreq;
+    std::atomic<int>  targetBand;
+    std::atomic<int>  targetVfo;
+    std::atomic<long> targetRitOffset;
+    std::atomic<int>  targetStepIdx;
+    std::atomic<int>  targetDigiMode;
+    std::atomic<int>  targetVol;
+    std::atomic<int>  targetPwr;
+    std::atomic<int>  targetMic;
+    std::atomic<int>  targetVoxThresh;
+    std::atomic<int>  targetVoxDelay;
+
+    // Command Flags (which parameter to update)
+    std::atomic<uint32_t> updateMask;
+    std::atomic<bool>     updatePending;
+
+    // ── Metrics (Written by Radio, Read by Web) ──
+    std::atomic<float> swr;
+    std::atomic<float> pwrW;
+    std::atomic<float> rssi;
+    std::atomic<int>   sLevel;
+
+    // ── Status Mirror (Written by Radio, Read by Web) ──
+    // This allows the Web to build JSON without touching Engine objects
+    std::atomic<long> currFreq;
+    std::atomic<int>  currBand;
+    std::atomic<bool> currUsb;
+    std::atomic<int>  currVfo;
+    std::atomic<bool> currRitEn;
+    std::atomic<long> currRitOff;
+    std::atomic<bool> currVoxEn;
+    std::atomic<int>  currVoxThresh;
+    std::atomic<int>  currVoxDelay;
+    std::atomic<int>  currVol;
+    std::atomic<int>  currPwr;
+    std::atomic<int>  currMic;
+    std::atomic<long> currMinFreq;
+    std::atomic<long> currMaxFreq;
+    std::atomic<long> currStepVal;
+    std::atomic<int>  currDigiMode;
+    std::atomic<int>  currModeIdx; // 0=RADIO, 1=GEN, 2=SETTINGS, 3=RIT
+    std::atomic<bool> currBusy;
+    std::atomic<bool> currTx;
+    std::atomic<bool> vfoCopyFlash; // Set true briefly when A=B happens
+
+    // Memory mirror for tooltips
+    struct MemEntry {
+        std::atomic<long> freq;
+        std::atomic<int>  band;
+        std::atomic<bool> occ;
+    } memMirror[NUM_MEM_CHANNELS];
+    std::atomic<uint32_t> memRevision; // Mirror of radio.getMemRevision()
+};
+
+// Masks for updateMask
+#define SYNC_FREQ       (1 << 0)
+#define SYNC_BAND       (1 << 1)
+#define SYNC_VFO        (1 << 2)
+#define SYNC_RIT        (1 << 3)
+#define SYNC_STEP       (1 << 4)
+#define SYNC_DIGI       (1 << 5)
+#define SYNC_VOL        (1 << 6)
+#define SYNC_PWR        (1 << 7)
+#define SYNC_MIC        (1 << 8)
+#define SYNC_VOX        (1 << 9)
+#define SYNC_MODE       (1 << 10) // DisplayMode switch
+#define SYNC_VFO_COPY   (1 << 11)
+#define SYNC_MEM_STORE  (1 << 12)
+#define SYNC_MEM_RECALL (1 << 13)
+
+extern SyncState g_sync;
+
 // ── Shared Enumerations ──────────────────────────────────────────────────
 
 enum class EncoderMode
@@ -119,15 +201,20 @@ enum class EncoderMode
 
 // ── Global State Variables (Shared between Cores) ──────────────────────────
 
-extern volatile bool g_tx;
+extern std::atomic<bool> g_tx;
+extern std::atomic<bool> g_mcpOk;
+extern std::atomic<unsigned long> g_lastActivityTime;
 
 // UI Synchronization Flags
-extern volatile bool g_guiNeedsUpdate;       // VFO/Status changed → triggers TFT refresh
+extern std::atomic<bool> g_guiNeedsUpdate;   // VFO/Status changed → triggers TFT refresh
 extern TaskHandle_t  g_networkTaskHandle;    // Set by TaskNetwork — used for event wakeup
 
 // System Performance Metrics
 extern volatile int g_cpuLoad0; // Core 0 utilization (%)
 extern volatile int g_cpuLoad1; // Core 1 utilization (%)
+extern volatile int g_wifiRssi;  // Signal strength in dBm
+extern volatile int g_webClients; // Number of connected WS clients
+extern volatile int g_netActivity; // Packets per second (TX+RX)
 
 // Encoder Accumulators
 extern volatile int  g_encPos;

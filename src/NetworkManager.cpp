@@ -2,61 +2,19 @@
 #include "RadioEngine.h"
 #include "AudioManager.h"
 #include "Display.h"
-#include "Time.h"
 #include "SettingsManager.h"
 #include "Hardware.h"
 #include "DigitalEngine.h"
 #include "EncoderActions.h"
 #include <WiFi.h>
-#include <WiFiUdp.h>
 #include "arduino_secrets.h"
 
 #include "TransceiverEditorHtml.h"
 #include <FFat.h>
 #include <ArduinoJson.h>
+#include <time.h>
 
 NetworkManager network;
-WiFiUDP ntpUDP;
-static const char* NTP_SERVER = "pool.ntp.org";
-
-// --- NTP & Time Support (from Gartenlampen project) ---
-
-unsigned long sendNTPpacket(IPAddress& address) {
-  byte packetBuffer[48];
-  memset(packetBuffer, 0, 48);
-  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
-  packetBuffer[1] = 0;            // Stratum
-  packetBuffer[2] = 6;            // Polling Interval
-  packetBuffer[3] = 0xEC;         // Peer Clock Precision
-  ntpUDP.beginPacket(address, 123);
-  ntpUDP.write(packetBuffer, 48);
-  return ntpUDP.endPacket();
-}
-
-time_t getNTPTime() {
-  IPAddress ntpIP;
-  if (!WiFi.hostByName(NTP_SERVER, ntpIP)) return 0;
-
-  while (ntpUDP.parsePacket() > 0) ntpUDP.flush();
-  sendNTPpacket(ntpIP);
-
-  uint32_t beginWait = millis();
-  while (millis() - beginWait < 1500) {
-    int size = ntpUDP.parsePacket();
-    if (size >= 48) {
-      byte buf[48];
-      ntpUDP.read(buf, 48);
-      unsigned long highWord = word(buf[40], buf[41]);
-      unsigned long lowWord = word(buf[42], buf[43]);
-      time_t t = (highWord << 16 | lowWord) - 2208988800UL;
-
-      // Return RAW UTC time for internal system clock
-      return t;
-    }
-    delay(10);
-  }
-  return 0;
-}
 
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html><head>
@@ -145,13 +103,27 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div style="margin-bottom:10px; font-size:0.8em; color:var(--dim)">System Load (CPU)</div>
         <div class="cpu-bar-container">
           <div style="flex:1">
-            <div style="font-size:0.65em; margin-bottom:2px">Core 0 (Net) <span id="cpu0_val">0%</span></div>
+            <div style="font-size:0.65em; margin-bottom:2px">Core 0 (System) <span id="cpu0_val">0%</span></div>
             <div class="cpu-bg"><div id="cpu0_bar" class="cpu-fill" style="background:#00aaff"></div></div>
           </div>
           <div style="flex:1">
-            <div style="font-size:0.65em; margin-bottom:2px">Core 1 (TRX) <span id="cpu1_val">0%</span></div>
+            <div style="font-size:0.65em; margin-bottom:2px">Core 1 (User) <span id="cpu1_val">0%</span></div>
             <div class="cpu-bg"><div id="cpu1_bar" class="cpu-fill" style="background:#00ff88"></div></div>
           </div>
+        </div>
+
+        <div class="cpu-bar-container" style="margin-top:10px">
+          <div style="flex:1">
+            <div style="font-size:0.65em; margin-bottom:2px">Network Traffic <span id="net_act_val_pct">0%</span></div>
+            <div class="cpu-bg"><div id="net_bar" class="cpu-fill" style="background:var(--accent); width:0%"></div></div>
+          </div>
+          <div style="flex:1"></div>
+        </div>
+
+        <div style="margin-top:10px; display:flex; justify-content:space-between; font-size:0.7em; color:var(--dim)">
+          <span>WiFi: <span id="wifi_val">--</span> dBm</span>
+          <span>Packets: <span id="net_act_val">0</span> p/s</span>
+          <span>Clients: <span id="client_val">0</span></span>
         </div>
       </div>
     </div>
@@ -163,7 +135,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="step-btn-group">
           <button class="btn-step" id="vfo_a_lbl" onclick="selectVfo(0)">VFO A</button>
           <button class="btn-step" id="vfo_b_lbl" onclick="selectVfo(1)">VFO B</button>
-          <button class="btn-step" onclick="vfoCopy()">A=B</button>
+          <button class="btn-step" id="btn_vfo_copy" onclick="vfoCopy()">A=B</button>
         </div>
       </div>
       <div class="control-row">
@@ -280,8 +252,9 @@ const char index_html[] PROGMEM = R"rawliteral(
     let fMin = 0, fMax = 30000000;
     let isVolDragging = false, isPwrDragging = false, isMicDragging = false, isUpdating = false;
     let isVoxThDragging = false, isVoxDelDragging = false;
-    let isDragging = false; // Flag for Tuning Wheel
-    let lastUserAction = 0; // Timestamp to prevent echo jumps
+    let isDragging = false;
+    let lastUserAction = 0;
+    let uiInitialized = false; // Flag to ignore P-Frames until first I-Frame
 
     function highlight(id, cond) {
         const el = document.getElementById(id);
@@ -299,115 +272,173 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
 
     function renderStatus(data) {
-        if (!data || data.freq === undefined) return;
+        if (!data) return;
 
-        // Synchronize UI Mode (RADIO, GEN, etc.)
-        document.body.className = "mode-" + (data.ui_mode || "RADIO");
-
-        // Block server updates if user is interacting or just finished (500ms cooldown)
-        const now = Date.now();
-        const interacting = isDragging || isVolDragging || isPwrDragging || isMicDragging || isVoxThDragging || isVoxDelDragging || (now - lastUserAction < 500);
-
-        if (!isDragging && (now - lastUserAction > 500)) {
-            currentFreq = data.freq;
+        // Mark as initialized if we get any valid frequency data
+        if (data.freq !== undefined && !uiInitialized) {
+            uiInitialized = true;
         }
 
-        ritOffset = data.rit_offset || 0;
-        ritEnabled = data.rit_enabled;
-        fMin = data.f_min || 0;
-        fMax = data.f_max || 30000000;
-        if (data.step_val) currentStep = data.step_val;
+        const now = Date.now();
+        const interacting = isDragging || (now - lastUserAction < 500);
 
-        formatFreqDisplay(currentFreq);
-        if (document.activeElement.id !== 'freq_num' && !interacting) document.getElementById('freq_num').value = currentFreq;
+        // Full Sync Update: Handle heavy structural updates
+        if (data.full) {
+            fMin = data.f_min || 0;
+            fMax = data.f_max || 30000000;
+            if (data.step_val) currentStep = data.step_val;
 
-        if(document.getElementById('band_name')) document.getElementById('band_name').innerText = data.band_name;
-        document.getElementById('mode_name').innerText = data.usb ? "USB" : "LSB";
+            // VOX Update
+            const voxBtn = document.getElementById('vox_toggle');
+            if (voxBtn && !interacting) {
+                const voxEnabled = data.vox_en;
+                voxBtn.innerText = voxEnabled ? "ON" : "OFF";
+                highlight('vox_toggle', voxEnabled);
+
+                document.getElementById('vox_thresh_val').innerText = data.vox_thresh;
+                const thSlider = document.getElementById('vox_thresh_slider');
+                thSlider.value = data.vox_thresh;
+                thSlider.disabled = !voxEnabled;
+                thSlider.style.opacity = voxEnabled ? "1" : "0.3";
+                document.getElementById('vox_thresh_val').style.opacity = voxEnabled ? "1" : "0.3";
+
+                document.getElementById('vox_delay_val').innerText = data.vox_delay + "ms";
+                const delSlider = document.getElementById('vox_delay_slider');
+                delSlider.value = data.vox_delay;
+                delSlider.disabled = !voxEnabled;
+                delSlider.style.opacity = voxEnabled ? "1" : "0.3";
+                document.getElementById('vox_delay_val').style.opacity = voxEnabled ? "1" : "0.3";
+            }
+
+            if (data.band_list) {
+                data.band_list.forEach((b, i) => {
+                    const btn = document.getElementById(bandIds[i]);
+                    if (btn) {
+                        btn.innerText = b.act ? b.name : "---";
+                        btn.dataset.active = b.act ? "true" : "false";
+                    }
+                });
+            }
+            [10, 100, 1000, 10000].forEach(s => highlight('s' + s, data.step_val == s));
+
+            const ritBtn = document.getElementById('rit_toggle');
+            if(ritBtn) ritBtn.innerText = data.rit_enabled ? "{{L_RIT_ON}}" : "{{L_RIT_OFF}}";
+            highlight('rit_toggle', data.rit_enabled);
+            ritOffset = data.rit_offset || 0;
+            ritEnabled = data.rit_enabled;
+        }
+
+        if (!uiInitialized) return; // Ignore everything until we have the baseline
+
+        // Update Slider parameters on ANY packet where they are present (Event-driven)
+        if (data.vol !== undefined && !interacting) {
+            document.getElementById('vol_slider').value = data.vol;
+            document.getElementById('vol_val_web').innerText = data.vol + "%";
+        }
+        if (data.pa_pwr !== undefined && !interacting) {
+            document.getElementById('pwr_slider').value = data.pa_pwr;
+            document.getElementById('pwr_val_web').innerText = data.pa_pwr + "%";
+        }
+        if (data.mic_gain !== undefined && !interacting) {
+            document.getElementById('mic_slider').value = data.mic_gain;
+            document.getElementById('mic_val_web').innerText = data.mic_gain + "%";
+        }
+
+        // Real-time Update: Essential for real-time operation
+        if (data.ui_mode) document.body.className = "mode-" + data.ui_mode;
+        if (data.band_name) document.getElementById('band_name').innerText = data.band_name;
+        if (data.usb !== undefined) document.getElementById('mode_name').innerText = data.usb ? "USB" : "LSB";
+
+        if (data.freq !== undefined) {
+            if (!isDragging && (now - lastUserAction > 500)) {
+                currentFreq = data.freq;
+            }
+            formatFreqDisplay(currentFreq);
+            if (document.activeElement.id !== 'freq_num' && !interacting) document.getElementById('freq_num').value = currentFreq;
+        }
+
         document.getElementById('swr_val').innerText = ": " + data.swr;
         document.getElementById('pwr_val').innerText = data.power_w + "W";
         document.getElementById('swr_bar').style.width = Math.min(100, (parseFloat(data.swr) - 1) * 33) + "%";
 
-        if (!isVolDragging && !interacting) { document.getElementById('vol_slider').value = data.vol; document.getElementById('vol_val_web').innerText = data.vol + "%"; }
-        if (!isPwrDragging && !interacting) { document.getElementById('pwr_slider').value = data.pa_pwr; document.getElementById('pwr_val_web').innerText = data.pa_pwr + "%"; }
-        if (!isMicDragging && !interacting) { document.getElementById('mic_slider').value = data.mic_gain; document.getElementById('mic_val_web').innerText = data.mic_gain + "%"; }
+        if (data.cpu0 !== undefined) {
+            document.getElementById('cpu0_bar').style.width = data.cpu0 + "%"; document.getElementById('cpu0_val').innerText = data.cpu0 + "%";
+            document.getElementById('cpu1_bar').style.width = data.cpu1 + "%"; document.getElementById('cpu1_val').innerText = data.cpu1 + "%";
 
-        document.getElementById('cpu0_bar').style.width = data.cpu0 + "%"; document.getElementById('cpu0_val').innerText = data.cpu0 + "%";
-        document.getElementById('cpu1_bar').style.width = data.cpu1 + "%"; document.getElementById('cpu1_val').innerText = data.cpu1 + "%";
+            document.getElementById('wifi_val').innerText = data.wifi_rssi;
+            document.getElementById('net_act_val').innerText = data.net_act;
+            const netPct = Math.min(100, Math.round(data.net_act / 1.5));
+            document.getElementById('net_bar').style.width = netPct + "%";
+            document.getElementById('net_act_val_pct').innerText = netPct + "%";
+            document.getElementById('client_val').innerText = data.web_clients;
+            document.getElementById('net_act_val_pct').innerText = netPct + "%";
+            document.getElementById('client_val').innerText = data.web_clients;
 
-        // VOX Update
-        const voxBtn = document.getElementById('vox_toggle');
-        if (voxBtn && !isVoxThDragging && !isVoxDelDragging && (now - lastUserAction > 500)) {
-            const voxEnabled = data.vox_en;
-            voxBtn.innerText = voxEnabled ? "ON" : "OFF";
-            highlight('vox_toggle', voxEnabled);
-
-            document.getElementById('vox_thresh_val').innerText = data.vox_thresh;
-            const thSlider = document.getElementById('vox_thresh_slider');
-            thSlider.value = data.vox_thresh;
-            thSlider.disabled = !voxEnabled;
-            thSlider.style.opacity = voxEnabled ? "1" : "0.3";
-            document.getElementById('vox_thresh_val').style.opacity = voxEnabled ? "1" : "0.3";
-
-            document.getElementById('vox_delay_val').innerText = data.vox_delay + "ms";
-            const delSlider = document.getElementById('vox_delay_slider');
-            delSlider.value = data.vox_delay;
-            delSlider.disabled = !voxEnabled;
-            delSlider.style.opacity = voxEnabled ? "1" : "0.3";
-            document.getElementById('vox_delay_val').style.opacity = voxEnabled ? "1" : "0.3";
+            const wifiEl = document.getElementById('wifi_val');
+            if (data.wifi_rssi > -60) wifiEl.style.color = '#00ff88';
+            else if (data.wifi_rssi > -80) wifiEl.style.color = '#ffcc00';
+            else wifiEl.style.color = '#ff4444';
         }
 
-        bandIds.forEach((id, idx) => highlight(id, data.band == idx));
-        highlight('m0', data.digi == 0);
-        highlight('m1', data.digi == 1);
-        highlight('vfo_a_lbl', data.vfo_active == 0);
-        highlight('vfo_b_lbl', data.vfo_active == 1);
-        highlight('rit_toggle', data.rit_enabled);
-        highlight('vox_toggle', data.vox_en);
-
-        const ritBtn = document.getElementById('rit_toggle');
-        if(ritBtn) {
-            ritBtn.innerText = data.rit_enabled ? "{{L_RIT_ON}}" : "{{L_RIT_OFF}}";
-        }
-
-        [10, 100, 1000, 10000].forEach(s => highlight('s' + s, data.step_val == s));
-
-        const isTransmitting = data.tx && data.ui_mode !== "GEN";
+        const isTransmitting = data.tx && (data.ui_mode === "RADIO" || data.ui_mode === undefined);
         const isBusy = data.busy || isTransmitting;
         const isGen = data.ui_mode === "GEN";
+
         document.getElementById('tx_led').className = data.tx ? "carrier-led on" : "carrier-led";
         document.getElementById('tx_status').innerText = data.tx ? "{{L_SENDING}}" : "{{L_IDLE}}";
 
-        const interactives = ['btn_tx_send', 'btn_mail_send', 'b10', 'b15', 'b20', 'b40', 'b80', 'b160'];
-        interactives.forEach(id => {
+        // VFO & Mode Highlighting
+        highlight('vfo_a_lbl', data.vfo_active === 0);
+        highlight('vfo_b_lbl', data.vfo_active === 1);
+        highlight('m0', data.digi === 0);
+        highlight('m1', data.digi === 1);
+
+        if (data.vfo_copy_flash) {
+            const b = document.getElementById('btn_vfo_copy');
+            b.classList.add('active');
+            setTimeout(() => b.classList.remove('active'), 200);
+        }
+
+        // Fast Highlight and Locking
+        if (data.band !== undefined) {
+            bandIds.forEach((id, idx) => highlight(id, data.band == idx));
+        }
+
+        bandIds.forEach((id, i) => {
+            const btn = document.getElementById(id);
+            if (btn) {
+                const isBandActive = (btn.dataset.active === "true");
+                const locked = !isBandActive || isGen; // Removed isBusy to allow recovery during TX
+                btn.disabled = locked;
+                btn.style.opacity = locked ? "0.3" : "1";
+            }
+        });
+
+        const otherInteractives = ['btn_tx_send', 'btn_mail_send'];
+        otherInteractives.forEach(id => {
             const btn = document.getElementById(id);
             if (!btn) return;
-
-            const isVoxControl = id.includes('vox');
-            const isLocked = isBusy || (isGen && (btn.classList.contains('btn') || btn.id.includes('send') || isVoxControl));
-
-            btn.disabled = isLocked;
+            const locked = isBusy || isGen;
+            btn.disabled = locked;
+            btn.style.opacity = locked ? "0.5" : "1";
             if (id.includes('send')) {
                 btn.innerText = isBusy ? "{{L_WAITING}}" : "{{L_SEND}}";
             }
-            btn.style.opacity = isLocked ? "0.5" : "1";
         });
 
-        // Update memory slot buttons
         if (data.mem_slots) {
-            const bandNames = ['10m','15m','20m','40m','80m','160m'];
-            data.mem_slots.forEach(function(slot, i) {
+            data.mem_slots.forEach((m, i) => {
                 const btn = document.getElementById('mem' + i);
-                if (!btn) return;
-                const occ = slot.occ;
-                btn.disabled = !occ;
-                btn.style.opacity = occ ? '1' : '0.5';
-                if (occ) {
-                    const mhz = Math.floor(slot.freq / 1000000);
-                    const khz = Math.floor((slot.freq % 1000000) / 1000);
-                    const bname = bandNames[slot.band] || '';
-                    btn.title = bname + ' ' + mhz + '.' + khz.toString().padStart(3,'0') + ' MHz';
-                } else {
-                    btn.title = '';
+                if (btn) {
+                    btn.disabled = !m.occ;
+                    btn.style.opacity = m.occ ? "1" : "0.3";
+                    btn.style.borderColor = (m.occ && m.freq == data.freq) ? "var(--accent)" : "#4a5568";
+                    if (m.occ && m.freq) {
+                        const bName = (data.band_list && data.band_list[m.band]) ? data.band_list[m.band].name : m.band;
+                        btn.title = bName + " " + (m.freq / 1000000).toFixed(3) + " MHz";
+                    } else {
+                        btn.title = "---";
+                    }
                 }
             });
         }
@@ -419,7 +450,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       fetch('/api/v1/status').then(r => r.json()).then(data => {
         isUpdating = false;
         renderStatus(data);
-      }).catch(e => { isUpdating = false; console.error("Update loop failed", e); });
+      }).catch(e => { isUpdating = false; console.error("Initial update failed", e); });
     }
 
     const wheel = document.getElementById('tuning_wheel');
@@ -460,16 +491,25 @@ const char index_html[] PROGMEM = R"rawliteral(
     wheel.addEventListener('mousedown', handleStart); window.addEventListener('mousemove', handleMove); window.addEventListener('mouseup', handleEnd);
     wheel.addEventListener('touchstart', handleStart); wheel.addEventListener('touchmove', handleMove); wheel.addEventListener('touchend', handleEnd);
 
-    // API Helpers
-    let apiThrottle = false;
+    // WebSocket Control Helpers
+    let lastSliderSend = 0;
+
+    function sendCmd(key, val, force = false) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const now = Date.now();
+        if (!force && (now - lastSliderSend < 50)) return;
+        lastSliderSend = now;
+        ws.send("SET:" + key + ":" + val);
+    }
+
     function setFreq(f) {
-        f = Math.min(Math.max(parseInt(f), fMin), fMax);
+        if (fMax > 0 && fMin < fMax) {
+            f = Math.min(Math.max(parseInt(f), fMin), fMax);
+        }
         currentFreq = f;
         formatFreqDisplay(currentFreq);
-        lastUserAction = Date.now(); // Mark user activity
-        if (apiThrottle) return;
-        apiThrottle = true;
-        fetch('/api/v1/control?freq=' + currentFreq, { method: 'POST' }).finally(() => { setTimeout(() => { apiThrottle = false; }, 100); });
+        lastUserAction = Date.now();
+        sendCmd('freq', currentFreq, true);
     }
     function stepFreq(dir) {
         setFreq(currentFreq + (dir * currentStep));
@@ -477,30 +517,30 @@ const char index_html[] PROGMEM = R"rawliteral(
     function setVolWeb(v) {
         lastUserAction = Date.now();
         document.getElementById('vol_val_web').innerText = v + "%";
-        fetch('/api/v1/control?vol=' + v, { method: 'POST' });
+        sendCmd('vol', v);
     }
     function setPwrWeb(v) {
         lastUserAction = Date.now();
         document.getElementById('pwr_val_web').innerText = v + "%";
-        fetch('/api/v1/control?pwr=' + v, { method: 'POST' });
+        sendCmd('pwr', v);
     }
     function setMicWeb(v) {
         lastUserAction = Date.now();
         document.getElementById('mic_val_web').innerText = v + "%";
-        fetch('/api/v1/control?mic=' + v, { method: 'POST' });
+        sendCmd('mic', v);
     }
     function selectVfo(i) {
-        fetch('/api/v1/control?vfo_set=' + i, { method: 'POST' });
+        sendCmd('vfo_set', i, true);
     }
     function vfoCopy() {
-        fetch('/api/v1/control?vfo_copy=1', { method: 'POST' });
+        sendCmd('vfo_copy', 1, true);
     }
     function setBand(i) {
-        lastUserAction = 0; // Force-accept server's new band frequency, bypass cooldown
-        fetch('/api/v1/control?band=' + i, { method: 'POST' });
+        lastUserAction = 0;
+        sendCmd('band', i, true);
     }
     function setDigi(i) {
-        fetch('/api/v1/control?mode=' + i, { method: 'POST' });
+        sendCmd('mode', i, true);
     }
     function setStep(s) {
         currentStep = s;
@@ -508,26 +548,26 @@ const char index_html[] PROGMEM = R"rawliteral(
             if(b.id.startsWith('s')) b.classList.remove('active');
         });
         document.getElementById('s' + s)?.classList.add('active');
-        fetch('/api/v1/control?step=' + s, { method: 'POST' });
+        sendCmd('step', s, true);
     }
     function toggleRit() {
-        fetch('/api/v1/control?rit_enable=' + (ritEnabled ? 0 : 1), { method: 'POST' });
+        sendCmd('rit_enable', (ritEnabled ? 0 : 1), true);
     }
     function setMode(m) {
-        fetch('/api/v1/control?ui_mode=' + m, { method: 'POST' });
+        sendCmd('ui_mode', m, true);
     }
     function stepRit(dir) {
-        fetch('/api/v1/control?rit_offset=' + (ritOffset + (dir * currentStep)), { method: 'POST' });
+        sendCmd('rit_offset', (ritOffset + (dir * currentStep)), true);
     }
     function resetRit() {
-        fetch('/api/v1/control?rit_offset=0', { method: 'POST' });
+        sendCmd('rit_offset', 0, true);
     }
     function memRecall(i) {
-        fetch('/api/v1/control?mem_recall=' + i, { method: 'POST' });
+        sendCmd('mem_recall', i, true);
     }
     function memStore() {
         const i = document.getElementById('mem_sel').value;
-        fetch('/api/v1/control?mem_store=' + i, { method: 'POST' });
+        sendCmd('mem_store', i, true);
     }
     function toggleVox() {
         const btn = document.getElementById('vox_toggle');
@@ -535,22 +575,22 @@ const char index_html[] PROGMEM = R"rawliteral(
         btn.innerText = nextState ? "ON" : "OFF";
         highlight('vox_toggle', nextState);
         lastUserAction = Date.now();
-        fetch('/api/v1/control?vox_enable=toggle', { method: 'POST' });
+        sendCmd('vox_enable', 'toggle', true);
     }
     function setVoxThresh(v) {
         lastUserAction = Date.now();
         document.getElementById('vox_thresh_val').innerText = v;
-        fetch('/api/v1/control?vox_thresh=' + v, { method: 'POST' });
+        sendCmd('vox_thresh', v);
     }
     function setVoxDelay(v) {
         lastUserAction = Date.now();
         document.getElementById('vox_delay_val').innerText = v + "ms";
-        fetch('/api/v1/control?vox_delay=' + v, { method: 'POST' });
+        sendCmd('vox_delay', v);
     }
     function send() {
         const val = document.getElementById('tx_in').value;
         if(!val) return;
-        fetch('/api/v1/transmit?text=' + encodeURIComponent(val), { method: 'POST' });
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send("TX:" + val);
         document.getElementById('tx_in').value = '';
     }
     function sendEmail() {
@@ -558,7 +598,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         const msg = document.getElementById('mail_msg').value;
         const gw = document.getElementById('mail_gw').value;
         if(!to || !msg) return;
-        fetch(`/api/v1/email?to=${encodeURIComponent(to)}&msg=${encodeURIComponent(msg)}&gw=${gw}`, { method: 'POST' });
+        if (ws && ws.readyState === WebSocket.OPEN) ws.send(`MAIL|${to}|${msg}|${gw}`);
         document.getElementById('mail_msg').value = '';
     }
     function updateMailCount() {
@@ -566,7 +606,14 @@ const char index_html[] PROGMEM = R"rawliteral(
         document.getElementById('mail_count').innerText = t + " / 67";
     }
 
-    window.onload = () => { update(); initWebSocket(); };
+    window.onload = () => {
+        bandIds.forEach(id => {
+            const btn = document.getElementById(id);
+            if(btn) btn.dataset.active = "true";
+        });
+        update(); // Fetch initial state once via REST to be 100% sure
+        initWebSocket();
+    };
     let ws;
     function initWebSocket() {
       ws = new WebSocket(`ws://${window.location.hostname}/ws`);
@@ -582,8 +629,6 @@ const char index_html[] PROGMEM = R"rawliteral(
       };
       ws.onopen = () => {
           document.getElementById('ws_conn').style.color = '#00ff44';
-          update(); // Trigger immediate status fetch on connect
-          setTimeout(update, 500); // And once more after some initial stabilization
       };
       ws.onclose = () => { document.getElementById('ws_conn').style.color = '#4a5568'; setTimeout(initWebSocket, 2000); };
     }
@@ -616,6 +661,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 // Internal helper for static access within AsyncWebServer callbacks
 static NetworkManager* _instance = nullptr;
+static uint32_t _netPktCounter = 0;
 
 NetworkManager::NetworkManager() : _server(80), _ws("/ws"), _sse("/api/v1/rx/stream")
 {
@@ -635,6 +681,7 @@ void NetworkManager::begin()
     }
 
     WiFi.begin(SECRET_SSID, SECRET_PASS);
+    WiFi.setSleep(false);  // WiFi Sleep Mode deaktivieren für stabile Verbindung
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20)
     {
@@ -651,9 +698,14 @@ void NetworkManager::begin()
     else
     {
         Serial.println(L_WIFI_ERR);
-        Serial.print(" AP-IP: ");
+        Serial.print(" AP-IP1: ");
         Serial.println(WiFi.softAPIP());
     }
+
+    Serial.print("Status: ");
+    Serial.println(WiFi.status());
+    Serial.print("MAC Address: ");
+    Serial.println(WiFi.macAddress());
 
     _ws.onEvent([this](AsyncWebSocket *s, AsyncWebSocketClient *c, AwsEventType t, void *arg, uint8_t *d, size_t l)
     {
@@ -665,7 +717,10 @@ void NetworkManager::begin()
 
     _setupRoutes();
     _server.begin();
-    ntpUDP.begin(8888);
+
+    // Start native, asynchronous ESP32 SNTP client
+    configTime(radio.getUtcOffset() * 3600, radio.isDstActive() ? 3600 : 0, "pool.ntp.org", "time.nist.gov");
+    Serial.println("SNTP: Native background engine started");
 
     _lastStatsTime = millis();
 }
@@ -674,16 +729,6 @@ void NetworkManager::process()
 {
     uint32_t startWork = micros();
     unsigned long nowMs = millis();
-    static unsigned long lastNtpSync = 0;
-
-    if (WiFi.status() == WL_CONNECTED && (lastNtpSync == 0 || nowMs - lastNtpSync > 600000)) {
-        time_t t = getNTPTime();
-        if (t > 0) {
-            setTime(t);
-            lastNtpSync = nowMs;
-            Serial.println("NTP: Time synchronized");
-        }
-    }
 
     if (nowMs - _lastWsCleanup > 2000)
     {
@@ -691,7 +736,7 @@ void NetworkManager::process()
         _lastWsCleanup = nowMs;
     }
 
-    // Called only when woken by notifyWebUpdate() or 2s timeout — always broadcast.
+    // Push unified status whenever process() is called (triggered by events)
     broadcastStatus();
 
     _workTimeAccum += (micros() - startWork);
@@ -701,7 +746,17 @@ void NetworkManager::process()
         if (WiFi.status() == WL_CONNECTED)
         {
             g_cpuLoad0 += 8;
+            g_wifiRssi = WiFi.RSSI();
         }
+        else
+        {
+            g_wifiRssi = -100;
+        }
+
+        g_webClients = _ws.count();
+        g_netActivity = _netPktCounter;
+        _netPktCounter = 0;
+
         if (g_cpuLoad0 > 100)
         {
             g_cpuLoad0 = 100;
@@ -711,75 +766,101 @@ void NetworkManager::process()
     }
 }
 
-void NetworkManager::broadcastStatus()
+void NetworkManager::broadcastStatus(bool force)
+{
+    static unsigned long lastBroadcast = 0;
+    unsigned long now = millis();
+
+    // Determine interval: 50ms if active, 2000ms if idle
+    unsigned long interval = 2000;
+
+    bool isActive = g_sync.currTx.load() ||
+                    g_sync.currBusy.load() ||
+                    (g_sync.sLevel.load() > 1) ||
+                    (now - g_lastActivityTime.load() < 5000); // 5s grace period after last action
+
+    if (isActive) interval = 50;
+    if (force) interval = 0;
+
+    if (now - lastBroadcast < interval) return;
+
+    _netPktCounter++;
+    _ws.textAll("JSON_STATUS:" + _buildStatusJson());
+    lastBroadcast = now;
+}
+
+String NetworkManager::_buildStatusJson()
 {
     String json;
-    json.reserve(1024); // Pre-allocate to avoid repeated heap reallocations
+    json.reserve(1280);
     json = "{";
-    json += "\"ui_mode\":\"" + String(ui.getCurrentMode()->getName()) + "\",";
-    json += "\"freq\":" + String((long)radio.getFrequency()) + ",";
-    json += "\"band\":" + String((int)radio.getBand()) + ",";
-    json += "\"band_name\":\"" + String(BANDS[radio.getBand()].name) + "\",";
-    json += "\"f_min\":" + String(radio.getMinFreq()) + ",";
-    json += "\"f_max\":" + String(radio.getMaxFreq()) + ",";
-    json += "\"usb\":" + String(radio.isUsb() ? "true" : "false") + ",";
-    json += "\"tx\":" + String(g_tx ? "true" : "false") + ",";
-    json += "\"busy\":" + String(digital.isBusy() ? "true" : "false") + ",";
-    json += "\"vfo_active\":" + String(radio.getActiveVfo()) + ",";
-    json += "\"rit_enabled\":" + String(radio.isRitEnabled() ? "true" : "false") + ",";
-    json += "\"rit_offset\":" + String(radio.getRitOffset()) + ",";
-    json += "\"step_val\":" + String(STEPS[radio.getStepIdx()]) + ",";
-    json += "\"digi\":" + String(digital.getMode()) + ",";
-    json += "\"vol\":" + String(audio.getVolume()) + ",";
-    json += "\"pa_pwr\":" + String(audio.getPaPower()) + ",";
-    json += "\"mic_gain\":" + String(audio.getMicGain()) + ",";
-    json += "\"vox_en\":" + String(radio.isVoxEnabled() ? "true" : "false") + ",";
-    json += "\"vox_thresh\":" + String(radio.getVoxThreshold()) + ",";
-    json += "\"vox_delay\":" + String(radio.getVoxDelay()) + ",";
+    json += "\"full\":true,";
+
+    String mName = "RADIO";
+    int mIdx = g_sync.currModeIdx.load();
+    if (mIdx == 1) mName = "GEN";
+    else if (mIdx == 2) mName = "SETTINGS";
+    else if (mIdx == 3) mName = "RIT";
+
+    json += "\"ui_mode\":\"" + mName + "\",";
+    json += "\"freq\":" + String(g_sync.currFreq.load()) + ",";
+    json += "\"band\":" + String(g_sync.currBand.load()) + ",";
+    json += "\"band_name\":\"" + String(BANDS[g_sync.currBand.load()].name) + "\",";
+    json += "\"f_min\":" + String(g_sync.currMinFreq.load()) + ",";
+    json += "\"f_max\":" + String(g_sync.currMaxFreq.load()) + ",";
+    json += "\"usb\":" + String(g_sync.currUsb.load() ? "true" : "false") + ",";
+    json += "\"tx\":" + String(g_sync.currTx.load() ? "true" : "false") + ",";
+    json += "\"busy\":" + String(g_sync.currBusy.load() ? "true" : "false") + ",";
+    json += "\"vfo_active\":" + String(g_sync.currVfo.load()) + ",";
+    json += "\"rit_enabled\":" + String(g_sync.currRitEn.load() ? "true" : "false") + ",";
+    json += "\"rit_offset\":" + String(g_sync.currRitOff.load()) + ",";
+    json += "\"step_val\":" + String(g_sync.currStepVal.load()) + ",";
+    json += "\"digi\":" + String(g_sync.currDigiMode.load()) + ",";
+    json += "\"vol\":" + String(g_sync.currVol.load()) + ",";
+    json += "\"pa_pwr\":" + String(g_sync.currPwr.load()) + ",";
+    json += "\"mic_gain\":" + String(g_sync.currMic.load()) + ",";
+    json += "\"vox_en\":" + String(g_sync.currVoxEn.load() ? "true" : "false") + ",";
+    json += "\"vox_thresh\":" + String(g_sync.currVoxThresh.load()) + ",";
+    json += "\"vox_delay\":" + String(g_sync.currVoxDelay.load()) + ",";
+    json += "\"vfo_copy_flash\":" + String(g_sync.vfoCopyFlash.exchange(false) ? "true" : "false") + ",";
+
+    // Band list
+    json += "\"band_list\":[";
+    for (int i = 0; i < NUM_BANDS; i++) {
+        if (i > 0) json += ",";
+        json += "{\"name\":\"" + String(BANDS[i].name) + "\",\"act\":" + String(BANDS[i].enabled ? "true" : "false") + "}";
+    }
+    json += "],";
+
     json += "\"cpu0\":" + String(g_cpuLoad0) + ",";
     json += "\"cpu1\":" + String(g_cpuLoad1) + ",";
-    // ADC reads are not thread-safe — serialize with g_hwMutex
-    SWRResult m;
-    if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(20)))
-    {
-        m = readSWR();
-        xSemaphoreGiveRecursive(g_hwMutex);
-    }
-    json += "\"swr\":\"" + String(m.swr, 1) + "\",";
-    json += "\"power_w\":\"" + String(m.powerW, 1) + "\",";
-    json += "\"s_level\":" + String(m.sLevel) + ",";
-    json += "\"rssi\":" + String(m.rssi, 2) + ",";
-    // Memory slots — 10 slots with occupied flag and stored frequency
+    json += "\"wifi_rssi\":" + String(g_wifiRssi) + ",";
+    json += "\"web_clients\":" + String(g_webClients) + ",";
+    json += "\"net_act\":" + String(g_netActivity) + ",";
+
+    json += "\"swr\":\"" + String(g_sync.swr.load(), 1) + "\",";
+    json += "\"power_w\":\"" + String(g_sync.pwrW.load(), 1) + "\",";
+    json += "\"s_level\":" + String(g_sync.sLevel.load()) + ",";
+    json += "\"rssi\":" + String(g_sync.rssi.load(), 2) + ",";
+
+    // Memory slots (Always include for tooltips)
     json += "\"mem_slots\":[";
-    const VfoState* slots = radio.getMemChannels();
     for (int i = 0; i < NUM_MEM_CHANNELS; i++)
     {
         if (i > 0) json += ",";
-        json += "{\"occ\":" + String(slots[i].occupied ? "true" : "false");
-        json += ",\"freq\":" + String(slots[i].freq);
-        json += ",\"band\":" + String(slots[i].band) + "}";
+        json += "{\"occ\":" + String(g_sync.memMirror[i].occ.load() ? "true" : "false");
+        json += ",\"freq\":" + String(g_sync.memMirror[i].freq.load());
+        json += ",\"band\":" + String(g_sync.memMirror[i].band.load()) + "}";
     }
     json += "]}";
-    _ws.textAll("JSON_STATUS:" + json);
-}
-
-void NetworkManager::sendToAll(const String& msg)
-{
-    _ws.textAll(msg);
-}
-
-void NetworkManager::sendRxEvent(char c)
-{
-    _ws.textAll("RX:" + String(c));
-    _sse.send(String(c).c_str(), "rx_char");
+    return json;
 }
 
 void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
 {
     if (type == WS_EVT_CONNECT)
     {
-        Serial.printf("WS: Client %u connected (IP: %s)\n", client->id(), client->remoteIP().toString().c_str());
-        client->text("RX:*** BITFABRIK TRX ONLINE ***\n");
+        client->text("JSON_STATUS:" + _buildStatusJson());
         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(10)))
         {
             const char* log = digital.getRxText();
@@ -790,6 +871,99 @@ void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *cl
     else if (type == WS_EVT_DISCONNECT)
     {
         Serial.printf("WS: Client %u disconnected\n", client->id());
+    }
+    else if (type == WS_EVT_DATA)
+    {
+        _netPktCounter++;
+        AwsFrameInfo *info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
+        {
+            data[len] = 0;
+            String msg = (char*)data;
+            if (msg.startsWith("SET:"))
+            {
+                g_lastActivityTime.store(millis());
+                // Format: "SET:key:value"
+                int firstColon = msg.indexOf(':', 4);
+                if (firstColon != -1)
+                {
+                    String key = msg.substring(4, firstColon);
+                    String val = msg.substring(firstColon + 1);
+                    uint32_t mask = 0;
+
+                    if (key == "ui_mode") {
+                        int modeIdx = 0;
+                        if (val == "GEN") modeIdx = (int)DisplayMode::Generator;
+                        else if (val == "SETTINGS") modeIdx = (int)DisplayMode::Settings;
+                        else if (val == "RIT") modeIdx = (int)DisplayMode::Rit;
+                        else modeIdx = (int)DisplayMode::Radio;
+                        g_sync.targetStepIdx = modeIdx;
+                        mask |= SYNC_MODE;
+                    }
+                    else if (key == "freq") { g_sync.targetFreq = val.toInt(); mask |= SYNC_FREQ; }
+                    else if (key == "vol")  { g_sync.targetVol = val.toInt(); mask |= SYNC_VOL; }
+                    else if (key == "pwr")  { g_sync.targetPwr = val.toInt(); mask |= SYNC_PWR; }
+                    else if (key == "mic")  { g_sync.targetMic = val.toInt(); mask |= SYNC_MIC; }
+                    else if (key == "band") { g_sync.targetBand = val.toInt(); mask |= SYNC_BAND; }
+                    else if (key == "mode") { g_sync.targetDigiMode = val.toInt(); mask |= SYNC_DIGI; }
+                    else if (key == "vfo_set") { g_sync.targetVfo = val.toInt(); mask |= SYNC_VFO; }
+                    else if (key == "vfo_copy") { mask |= SYNC_VFO_COPY; }
+                    else if (key == "rit_enable") { g_sync.currRitEn = (val.toInt() == 1); mask |= SYNC_RIT; }
+                    else if (key == "rit_offset") { g_sync.targetRitOffset = val.toInt(); mask |= SYNC_RIT; }
+                    else if (key == "mem_store") { g_sync.targetVfo = val.toInt(); mask |= SYNC_MEM_STORE; }
+                    else if (key == "mem_recall") { g_sync.targetVfo = val.toInt(); mask |= SYNC_MEM_RECALL; }
+                    else if (key == "step") { g_sync.targetStepIdx = val.toInt(); mask |= SYNC_STEP; }
+                    else if (key == "vox_enable") { g_sync.currVoxEn = !g_sync.currVoxEn.load(); mask |= SYNC_VOX; }
+                    else if (key == "vox_thresh") { g_sync.targetVoxThresh = val.toInt(); mask |= SYNC_VOX; }
+                    else if (key == "vox_delay") { g_sync.targetVoxDelay = val.toInt(); mask |= SYNC_VOX; }
+
+                    if (mask != 0) {
+                        g_sync.updateMask.fetch_or(mask);
+                        g_sync.updatePending = true;
+                        notifyWebUpdate();
+                    }
+                }
+            }
+            else if (msg.startsWith("TX:"))
+            {
+                g_lastActivityTime.store(millis());
+                String text = msg.substring(3);
+                if (!digital.isBusy())
+                {
+                    if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(50)))
+                    {
+                        digital.queue.pushString(text);
+                        xSemaphoreGive(g_mutex);
+                    }
+                    notifyWebUpdate();
+                }
+            }
+            else if (msg.startsWith("MAIL|"))
+            {
+                g_lastActivityTime.store(millis());
+                // Format: "MAIL|to|msg|gw"
+                int firstPipe = msg.indexOf('|', 5);
+                int lastPipe = msg.lastIndexOf('|');
+                if (firstPipe != -1 && lastPipe != -1 && firstPipe != lastPipe)
+                {
+                    String to = msg.substring(5, firstPipe);
+                    String body = msg.substring(firstPipe + 1, lastPipe);
+                    String gw = msg.substring(lastPipe + 1);
+
+                    if (!digital.isBusy())
+                    {
+                        String formatted = (gw == "js8") ? "@APRSIS CMD :EMAIL-2 :" + to + " " + body + " {01}" : "EMAIL-2 :" + to + " " + body;
+                        if (formatted.length() > 100) formatted = formatted.substring(0, 100);
+                        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(50)))
+                        {
+                            digital.queue.pushString(formatted);
+                            xSemaphoreGive(g_mutex);
+                        }
+                        notifyWebUpdate();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -873,164 +1047,132 @@ void NetworkManager::_setupRoutes()
 
     _server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest *request)
     {
-        String json;
-        json.reserve(1024);
-        json = "{";
-        json += "\"ui_mode\":\"" + String(ui.getCurrentMode()->getName()) + "\",";
-        json += "\"freq\":" + String((long)radio.getFrequency()) + ",";
-        json += "\"band\":" + String((int)radio.getBand()) + ",";
-        json += "\"band_name\":\"" + String(BANDS[radio.getBand()].name) + "\",";
-        json += "\"f_min\":" + String(radio.getMinFreq()) + ",";
-        json += "\"f_max\":" + String(radio.getMaxFreq()) + ",";
-        json += "\"usb\":" + String(radio.isUsb() ? "true" : "false") + ",";
-        json += "\"tx\":" + String(g_tx ? "true" : "false") + ",";
-        json += "\"busy\":" + String(digital.isBusy() ? "true" : "false") + ",";
-        json += "\"vfo_active\":" + String(radio.getActiveVfo()) + ",";
-        json += "\"rit_enabled\":" + String(radio.isRitEnabled() ? "true" : "false") + ",";
-        json += "\"rit_offset\":" + String(radio.getRitOffset()) + ",";
-        json += "\"step_val\":" + String(STEPS[radio.getStepIdx()]) + ",";
-        json += "\"digi\":" + String(digital.getMode()) + ",";
-        json += "\"vol\":" + String(audio.getVolume()) + ",";
-        json += "\"pa_pwr\":" + String(audio.getPaPower()) + ",";
-        json += "\"mic_gain\":" + String(audio.getMicGain()) + ",";
-        json += "\"vox_en\":" + String(radio.isVoxEnabled() ? "true" : "false") + ",";
-        json += "\"vox_thresh\":" + String(radio.getVoxThreshold()) + ",";
-        json += "\"vox_delay\":" + String(radio.getVoxDelay()) + ",";
-        json += "\"cpu0\":" + String(g_cpuLoad0) + ",";
-        json += "\"cpu1\":" + String(g_cpuLoad1) + ",";
-        SWRResult m;
-        if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(20)))
-        {
-            m = readSWR();
-            xSemaphoreGiveRecursive(g_hwMutex);
-        }
-        json += "\"swr\":\"" + String(m.swr, 1) + "\",";
-        json += "\"power_w\":\"" + String(m.powerW, 1) + "\",";
-        json += "\"s_level\":" + String(m.sLevel) + ",";
-        json += "\"rssi\":" + String(m.rssi, 2) + ",";
-        // Memory slots
-        json += "\"mem_slots\":[";
-        const VfoState* slots = radio.getMemChannels();
-        for (int i = 0; i < NUM_MEM_CHANNELS; i++)
-        {
-            if (i > 0) json += ",";
-            json += "{\"occ\":" + String(slots[i].occupied ? "true" : "false");
-            json += ",\"freq\":" + String(slots[i].freq);
-            json += ",\"band\":" + String(slots[i].band) + "}";
-        }
-        json += "]}";
-        request->send(200, "application/json", json);
+        request->send(200, "application/json", _instance->_buildStatusJson());
     });
 
     _server.on("/api/v1/control", HTTP_ANY, [](AsyncWebServerRequest *request)
     {
         bool handled = false;
+        uint32_t mask = 0;
+
         if (request->hasParam("ui_mode"))
         {
             String m = request->getParam("ui_mode")->value();
-            if (m == "GEN") ui.setMode(DisplayMode::Generator);
-            else if (m == "SETTINGS") ui.setMode(DisplayMode::Settings);
-            else if (m == "RIT") ui.setMode(DisplayMode::Rit);
-            else ui.setMode(DisplayMode::Radio);
+            int modeIdx = 0;
+            if (m == "GEN") modeIdx = (int)DisplayMode::Generator;
+            else if (m == "SETTINGS") modeIdx = (int)DisplayMode::Settings;
+            else if (m == "RIT") modeIdx = (int)DisplayMode::Rit;
+            else modeIdx = (int)DisplayMode::Radio;
+
+            g_sync.targetStepIdx = modeIdx; // Proxy for mode switch
+            mask |= SYNC_MODE;
             handled = true;
         }
         if (request->hasParam("freq"))
         {
-            radio.setFrequency(request->getParam("freq")->value().toInt());
+            g_sync.targetFreq = request->getParam("freq")->value().toInt();
+            mask |= SYNC_FREQ;
             handled = true;
         }
         if (request->hasParam("vol"))
         {
-            encManager.setMode(EncoderMode::Volume);
-            audio.setVolume(request->getParam("vol")->value().toInt());
+            g_sync.targetVol = request->getParam("vol")->value().toInt();
+            mask |= SYNC_VOL;
             handled = true;
         }
         if (request->hasParam("pwr"))
         {
-            encManager.setMode(EncoderMode::Power);
-            audio.setPaPower(request->getParam("pwr")->value().toInt());
+            g_sync.targetPwr = request->getParam("pwr")->value().toInt();
+            mask |= SYNC_PWR;
             handled = true;
         }
         if (request->hasParam("mic"))
         {
-            encManager.setMode(EncoderMode::Mic);
-            audio.setMicGain(request->getParam("mic")->value().toInt());
+            g_sync.targetMic = request->getParam("mic")->value().toInt();
+            mask |= SYNC_MIC;
             handled = true;
         }
         if (request->hasParam("band"))
         {
-            radio.selectBand(request->getParam("band")->value().toInt());
+            g_sync.targetBand = request->getParam("band")->value().toInt();
+            mask |= SYNC_BAND;
             handled = true;
         }
         if (request->hasParam("mode"))
         {
-            digital.setMode(request->getParam("mode")->value().toInt());
-            g_guiNeedsUpdate = true;
+            g_sync.targetDigiMode = request->getParam("mode")->value().toInt();
+            mask |= SYNC_DIGI;
             handled = true;
         }
         if (request->hasParam("vfo_set"))
         {
-            radio.switchVfo(request->getParam("vfo_set")->value().toInt());
+            g_sync.targetVfo = request->getParam("vfo_set")->value().toInt();
+            mask |= SYNC_VFO;
             handled = true;
         }
         if (request->hasParam("vfo_copy"))
         {
-            radio.vfoCopy();
+            mask |= SYNC_VFO_COPY;
             handled = true;
         }
         if (request->hasParam("rit_enable"))
         {
-            radio.setRitEnabled(request->getParam("rit_enable")->value().toInt() == 1);
+            g_sync.currRitEn = (request->getParam("rit_enable")->value().toInt() == 1);
+            mask |= SYNC_RIT;
             handled = true;
         }
         if (request->hasParam("rit_offset"))
         {
-            radio.setRitOffset(request->getParam("rit_offset")->value().toInt());
+            g_sync.targetRitOffset = request->getParam("rit_offset")->value().toInt();
+            mask |= SYNC_RIT;
             handled = true;
         }
         if (request->hasParam("mem_store"))
         {
-            radio.memStore(request->getParam("mem_store")->value().toInt());
+            g_sync.targetVfo = request->getParam("mem_store")->value().toInt();
+            mask |= SYNC_MEM_STORE;
             handled = true;
         }
         if (request->hasParam("mem_recall"))
         {
-            radio.memRecall(request->getParam("mem_recall")->value().toInt());
+            g_sync.targetVfo = request->getParam("mem_recall")->value().toInt();
+            mask |= SYNC_MEM_RECALL;
             handled = true;
         }
         if (request->hasParam("step"))
         {
-            int s = request->getParam("step")->value().toInt();
-            for(int i = 0; i < NUM_STEPS; i++)
-            {
-                if(STEPS[i] == s)
-                {
-                    radio.setStepIdx(i);
-                    break;
-                }
-            }
+            g_sync.targetStepIdx = request->getParam("step")->value().toInt();
+            mask |= SYNC_STEP;
             handled = true;
         }
         if (request->hasParam("vox_enable"))
         {
-            radio.setVoxEnabled(!radio.isVoxEnabled());
+            // We use targetDigiMode as a temporary holder for toggle flag if needed,
+            // but let's just use the mask and currVoxEn to toggle in Hardware.cpp
+            mask |= SYNC_VOX;
+            g_sync.currVoxEn = !g_sync.currVoxEn.load(); // Toggle the mirrored state
             handled = true;
         }
         if (request->hasParam("vox_thresh"))
         {
-            radio.setVoxThreshold(request->getParam("vox_thresh")->value().toInt());
+            g_sync.targetVoxThresh = request->getParam("vox_thresh")->value().toInt();
+            mask |= SYNC_VOX;
             handled = true;
         }
         if (request->hasParam("vox_delay"))
         {
-            radio.setVoxDelay(request->getParam("vox_delay")->value().toInt());
+            g_sync.targetVoxDelay = request->getParam("vox_delay")->value().toInt();
+            mask |= SYNC_VOX;
             handled = true;
         }
 
         if (handled)
         {
-            settings.setUpdated();
-            notifyWebUpdate();
+            if (mask != 0) {
+                g_sync.updateMask.fetch_or(mask);
+                g_sync.updatePending = true;
+                notifyWebUpdate();
+            }
             request->send(200, "text/plain", "OK");
         }
         else
@@ -1081,53 +1223,6 @@ void NetworkManager::_setupRoutes()
     });
 }
 
-String NetworkManager::getIndexHtml()
-{
-  String s;
-  s.reserve(24000);
-  s = String(index_html);
-
-  // Headers & Cards
-  s.replace("{{H_LIVE_MONITOR}}",   H_LIVE_MONITOR);
-  s.replace("{{H_SIGNAL_HEALTH}}",  H_SIGNAL_HEALTH);
-  s.replace("{{H_TUNING_CONTROLS}}", H_TUNING_CONTROLS);
-  s.replace("{{H_DIGI_MSG}}",       H_DIGI_MSG);
-  s.replace("{{H_MAIL_GW}}",        H_MAIL_GW);
-  s.replace("{{H_MEM_CHANNELS}}",   H_MEM_CHANNELS);
-  s.replace("{{H_DECODED_STREAM}}", H_DECODED_STREAM);
-  s.replace("{{H_BAND_MODE}}",      H_BAND_MODE);
-
-  // Tuning Controls
-  s.replace("{{L_RIT_OFF}}",        L_RIT_OFF);
-  s.replace("{{L_RIT_ON}}",         L_RIT_ON);
-
-  // Audio & Power
-  s.replace("{{L_VOL}}",            L_VOL);
-  s.replace("{{TX_PWR_CTRL}}",      TX_PWR_CTRL);
-  s.replace("{{L_MIC_GAIN}}",       L_MIC_GAIN);
-
-  // Digital & Status
-  s.replace("{{L_MORSE_MODE}}",     L_MORSE_MODE);
-  s.replace("{{L_RTTY_MODE}}",      L_RTTY_MODE);
-  s.replace("{{L_TX_STATUS}}",      L_TX_STATUS);
-  s.replace("{{L_IDLE}}",           L_IDLE);
-  s.replace("{{L_SENDING}}",        L_SENDING);
-  s.replace("{{L_WAITING}}",        L_WAITING);
-  s.replace("{{L_SEND}}",           L_SEND);
-
-  // Messaging Labels
-  s.replace("{{H_MSG_PLACEHOLDER}}", H_MSG_PLACEHOLDER);
-  s.replace("{{L_MAIL_RECIPIENT}}", L_MAIL_RECIPIENT);
-  s.replace("{{L_MAIL_BODY}}",      L_MAIL_BODY);
-
-  // Memory & Decoded Stream
-  s.replace("{{L_SAVE_TO}}",        L_SAVE_TO);
-  s.replace("{{L_SICHERN}}",        L_SICHERN);
-  s.replace("{{L_WAIT_SIGNAL}}",    L_WAIT_SIGNAL);
-
-  return s;
-}
-
 static int getBandIndexByName(String name)
 {
   name.toLowerCase();
@@ -1141,6 +1236,59 @@ static int getBandIndexByName(String name)
     }
   }
   return -1;
+}
+
+void NetworkManager::sendRxEvent(char c)
+{
+    _ws.textAll("RX:" + String(c));
+    _sse.send(String(c).c_str(), "rx_char");
+}
+
+String NetworkManager::getIndexHtml()
+{
+    String s;
+    s.reserve(24000);
+    s = String(index_html);
+
+    // Headers & Cards
+    s.replace("{{H_LIVE_MONITOR}}",   H_LIVE_MONITOR);
+    s.replace("{{H_SIGNAL_HEALTH}}",  H_SIGNAL_HEALTH);
+    s.replace("{{H_TUNING_CONTROLS}}", H_TUNING_CONTROLS);
+    s.replace("{{H_DIGI_MSG}}",       H_DIGI_MSG);
+    s.replace("{{H_MAIL_GW}}",        H_MAIL_GW);
+    s.replace("{{H_MEM_CHANNELS}}",   H_MEM_CHANNELS);
+    s.replace("{{H_DECODED_STREAM}}", H_DECODED_STREAM);
+    s.replace("{{H_BAND_MODE}}",      H_BAND_MODE);
+
+    // Tuning Controls
+    s.replace("{{L_RIT_OFF}}",        L_RIT_OFF);
+    s.replace("{{L_RIT_ON}}",         L_RIT_ON);
+
+    // Audio & Power
+    s.replace("{{L_VOL}}",            L_VOL);
+    s.replace("{{TX_PWR_CTRL}}",      TX_PWR_CTRL);
+    s.replace("{{L_MIC_GAIN}}",       L_MIC_GAIN);
+
+    // Digital & Status
+    s.replace("{{L_MORSE_MODE}}",     L_MORSE_MODE);
+    s.replace("{{L_RTTY_MODE}}",      L_RTTY_MODE);
+    s.replace("{{L_TX_STATUS}}",      L_TX_STATUS);
+    s.replace("{{L_IDLE}}",           L_IDLE);
+    s.replace("{{L_SENDING}}",        L_SENDING);
+    s.replace("{{L_WAITING}}",        L_WAITING);
+    s.replace("{{L_SEND}}",           L_SEND);
+
+    // Messaging Labels
+    s.replace("{{H_MSG_PLACEHOLDER}}", H_MSG_PLACEHOLDER);
+    s.replace("{{L_MAIL_RECIPIENT}}", L_MAIL_RECIPIENT);
+    s.replace("{{L_MAIL_BODY}}",      L_MAIL_BODY);
+
+    // Memory & Decoded Stream
+    s.replace("{{L_SAVE_TO}}",        L_SAVE_TO);
+    s.replace("{{L_SICHERN}}",        L_SICHERN);
+    s.replace("{{L_WAIT_SIGNAL}}",    L_WAIT_SIGNAL);
+
+    return s;
 }
 
 void TaskNetwork(void *p)

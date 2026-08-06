@@ -1,6 +1,7 @@
 #include "AudioManager.h"
 #include "Hardware.h"
 #include "Display.h"
+#include "NetworkManager.h"
 #include <SPI.h>
 
 AudioManager audio;
@@ -11,15 +12,15 @@ AudioManager::AudioManager()
 
 void AudioManager::begin()
 {
-    // PWM Signal Initialization for Audio Volume
+    // PWM Signal Initialization for Dual-Volume Control (NF + ZF)
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-        ledcAttach(PIN_VOLUME_PWM, VOL_PWM_FREQ, VOL_PWM_RES);
-        ledcAttach(PIN_PA_PWR_PWM, PA_PWR_PWM_FREQ, PA_PWR_PWM_RES);
+        ledcAttach(AUDIO_VOLUME_PWM, AUDIO_VOL_PWM_FREQ, AUDIO_VOL_PWM_RES);
+        ledcAttach(ZF_AGC_PWM, ZF_AGC_PWM_FREQ, ZF_AGC_PWM_RES);
     #else
-        ledcSetup(VOL_PWM_CHAN, VOL_PWM_FREQ, VOL_PWM_RES);
-        ledcAttachPin(PIN_VOLUME_PWM, VOL_PWM_CHAN);
-        ledcSetup(PA_PWR_PWM_CHAN, PA_PWR_PWM_FREQ, PA_PWR_PWM_RES);
-        ledcAttachPin(PIN_PA_PWR_PWM, PA_PWR_PWM_CHAN);
+        ledcSetup(AUDIO_VOL_PWM_CHAN, AUDIO_VOL_PWM_FREQ, AUDIO_VOL_PWM_RES);
+        ledcAttachPin(AUDIO_VOLUME_PWM, AUDIO_VOL_PWM_CHAN);
+        ledcSetup(ZF_AGC_PWM_CHAN, ZF_AGC_PWM_FREQ, ZF_AGC_PWM_RES);
+        ledcAttachPin(ZF_AGC_PWM, ZF_AGC_PWM_CHAN);
     #endif
 
     setVolume(_volume);
@@ -28,45 +29,45 @@ void AudioManager::begin()
 }
 
 /**
- * Sets receiver gain via PWM low-pass filtered voltage.
+ * Sets receiver gain via Dual-PWM control:
+ * 1. AUDIO_VOLUME_PWM (NF Stage / Speaker)
+ * 2. ZF_AGC_PWM (ZF Stage / Pre-amplification)
  */
 void AudioManager::setVolume(int vol)
 {
     _volume = constrain(vol, 0, 100);
-    int pwmVal = VOL_PWM_MIN + (int)((float)_volume * (VOL_PWM_MAX - VOL_PWM_MIN) / 100.0f);
+
+    // Calculate NF Volume (Pin 13)
+    int nfPwm = AUDIO_VOL_PWM_MIN + (int)((float)_volume * (AUDIO_VOL_PWM_MAX - AUDIO_VOL_PWM_MIN) / 100.0f);
+
+    // Calculate ZF Gain (Pin 14)
+    // Mapping 0-100% to ZF_AGC_MIN-255
+    int zfPwm = 0;
+    if (_volume > 0)
+    {
+        zfPwm = map(_volume, 1, 100, ZF_AGC_MIN, 255);
+    }
 
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-        ledcWrite(PIN_VOLUME_PWM, pwmVal);
+        ledcWrite(AUDIO_VOLUME_PWM, nfPwm);
+        ledcWrite(ZF_AGC_PWM, zfPwm);
     #else
-        ledcWrite(VOL_PWM_CHAN, pwmVal);
+        ledcWrite(AUDIO_VOL_PWM_CHAN, nfPwm);
+        ledcWrite(ZF_AGC_PWM_CHAN, zfPwm);
     #endif
 
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
 }
 
 /**
- * Sets PA output power level via PWM bias/driver control.
+ * Sets Sendeleistung (UI-Status).
+ * Note: Hardware PWM for PA power is currently not mapped to a dedicated pin,
+ * as Pin 14 is used for ZF Volume Gain.
  */
 void AudioManager::setPaPower(int level)
 {
     _paPower = constrain(level, 0, 100);
-
-    int pwmVal = 0;
-    if (_paPower > 0)
-    {
-        // Map 1-100% to PA_PWR_MIN-255 (Bias range)
-        pwmVal = map(_paPower, 1, 100, PA_PWR_MIN, 255);
-    }
-
-    #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-        ledcWrite(PIN_PA_PWR_PWM, pwmVal);
-    #else
-        ledcWrite(PA_PWR_PWM_CHAN, pwmVal);
-    #endif
-
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
 }
 
 /**
@@ -80,7 +81,7 @@ void AudioManager::setMicGain(int gain)
     // 0x11 = Write to Potentiometer 0
     uint8_t rawVal = (uint8_t)((float)_micGain * 2.55f);
 
-    if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
         digitalWrite(MIC_CS, LOW);
         SPI.transfer(0x11);
@@ -89,5 +90,4 @@ void AudioManager::setMicGain(int gain)
         xSemaphoreGiveRecursive(g_hwMutex);
     }
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
 }

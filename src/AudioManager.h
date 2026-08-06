@@ -12,8 +12,8 @@
 class AudioManager
 {
 private:
-    volatile int _volume = 50;   // Audio Gain 0-100%
-    volatile int _paPower = 100; // Transmission Power 0-100%
+    volatile int _volume = 50;   // Audio Gain 0-100% (Controls BOTH ZF and NF)
+    volatile int _paPower = 100; // Sendeleistung 0-100%
     volatile int _micGain = 50;  // Microphone Gain 0-100%
 
 public:

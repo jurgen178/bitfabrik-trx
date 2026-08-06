@@ -437,8 +437,7 @@ public:
 
     void onEnter() override
     {
-        pinMode(PIN_TX_PA_ACTIVE, OUTPUT);
-        digitalWrite(PIN_TX_PA_ACTIVE, HIGH);
+        // PA state is managed by the Hardware Sequencer (setTxRx)
         g_tx = false;
         _initButtons();
     }
@@ -521,11 +520,18 @@ public:
 
     void onEnter() override
     {
-        // Safety First: Disable PA but enable TX state for VFO output
-        pinMode(PIN_TX_PA_ACTIVE, OUTPUT);
-        digitalWrite(PIN_TX_PA_ACTIVE, LOW);
+        // Safety First: Ensure PA remains disabled while in Generator Mode
+        if (g_mcpOk)
+        {
+            mcp.digitalWrite(MCP_TX_PA_ACTIVE, LOW);
+        }
         radio.setUnlockedRange(true);
-        setTxRx(true);
+        // Note: We might want VFO output but NO PA activation.
+        // For now, we set g_tx directly to bypass the sequencer's PA activation if needed,
+        // or ensure setTxRx(true) is handled safely.
+        g_tx = true;
+        radio.refreshRelays();
+
         encManager.setMode(EncoderMode::Tune); // Force exit from VOL/POWER etc.
 
         // Visual indicator on screen
@@ -543,7 +549,6 @@ public:
         radio.setUnlockedRange(false);
         radio.setFrequency(radio.getFrequency()); // Force snap back to band
         setTxRx(false);
-        digitalWrite(PIN_TX_PA_ACTIVE, HIGH);
     }
 
     void onRotate(int delta) override
@@ -855,62 +860,75 @@ void DisplayController::begin()
 
 void DisplayController::setMode(DisplayMode mode)
 {
-    AppMode* nextMode = nullptr;
-    switch(mode)
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        case DisplayMode::Generator: nextMode = _genMode; break;
-        case DisplayMode::Settings:  nextMode = _settingsMode; break;
-        case DisplayMode::Rit:       nextMode = _ritMode; break;
-        case DisplayMode::Volume:    nextMode = _volMode; break;
-        case DisplayMode::Power:     nextMode = _pwrMode; break;
-        case DisplayMode::Mic:       nextMode = _micMode; break;
-        default:                     nextMode = _radioMode; break;
-    }
+        AppMode* nextMode = nullptr;
+        switch(mode)
+        {
+            case DisplayMode::Generator: nextMode = _genMode; break;
+            case DisplayMode::Settings:  nextMode = _settingsMode; break;
+            case DisplayMode::Rit:       nextMode = _ritMode; break;
+            case DisplayMode::Volume:    nextMode = _volMode; break;
+            case DisplayMode::Power:     nextMode = _pwrMode; break;
+            case DisplayMode::Mic:       nextMode = _micMode; break;
+            default:                     nextMode = _radioMode; break;
+        }
 
-    if (nextMode == _currentMode) {
-        // Refresh timeout if already in a param mode
+        if (nextMode == _currentMode) {
+            // Refresh timeout if already in a param mode
+            if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
+                _modeTimeout = millis();
+            xSemaphoreGiveRecursive(g_hwMutex);
+            return;
+        }
+
+        if (_currentMode)
+            _currentMode->onLeave();
+
+        _previousMode = _currentMode;
+        _currentMode = nextMode;
+        _currentMode->onEnter();
+
+        // Synchronize Encoder Manager
+        if (mode == DisplayMode::Volume) encManager.setMode(EncoderMode::Volume);
+        else if (mode == DisplayMode::Power) encManager.setMode(EncoderMode::Power);
+        else if (mode == DisplayMode::Mic) encManager.setMode(EncoderMode::Mic);
+        else if (mode == DisplayMode::Rit) encManager.setMode(EncoderMode::Rit);
+        else if (mode == DisplayMode::Radio) encManager.setMode(EncoderMode::Tune);
+
         if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
             _modeTimeout = millis();
-        return;
+        else
+            _modeTimeout = 0;
+
+        notifyWebUpdate();
+        drawFullUI();
+        xSemaphoreGiveRecursive(g_hwMutex);
     }
-
-    if (_currentMode)
-        _currentMode->onLeave();
-
-    _previousMode = _currentMode;
-    _currentMode = nextMode;
-    _currentMode->onEnter();
-
-    // Synchronize Encoder Manager
-    if (mode == DisplayMode::Volume) encManager.setMode(EncoderMode::Volume);
-    else if (mode == DisplayMode::Power) encManager.setMode(EncoderMode::Power);
-    else if (mode == DisplayMode::Mic) encManager.setMode(EncoderMode::Mic);
-    else if (mode == DisplayMode::Rit) encManager.setMode(EncoderMode::Rit);
-    else if (mode == DisplayMode::Radio) encManager.setMode(EncoderMode::Tune);
-
-    if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
-        _modeTimeout = millis();
-    else
-        _modeTimeout = 0;
-
-    notifyWebUpdate();
-    drawFullUI();
 }
 
 void DisplayController::drawFullUI()
 {
-    tft.fillScreen(TFT_BLACK);
-    if (_currentMode == _radioMode)
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        tft.drawRect(5, 5, 470, 75, TRX_AMBER_LOW);
+        tft.fillScreen(TFT_BLACK);
+        if (_currentMode == _radioMode)
+        {
+            tft.drawRect(5, 5, 470, 75, TRX_AMBER_LOW);
+        }
+        _currentMode->render(true);
+        xSemaphoreGiveRecursive(g_hwMutex);
     }
-    _currentMode->render(true);
 }
 
 void DisplayController::update(bool force)
 {
-    checkTimeout();
-    _currentMode->render(force);
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        checkTimeout();
+        _currentMode->render(force);
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
 }
 
 void DisplayController::checkTimeout()
@@ -927,7 +945,7 @@ void DisplayController::checkTimeout()
  */
 void updateOled1()
 {
-  if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
       display1.clearDisplay();
       display1.setTextSize(1);
@@ -990,7 +1008,7 @@ void updateOled1()
 
 void updateOled2()
 {
-  if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+  if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
       display2.clearDisplay();
       display2.setTextSize(1);
@@ -1001,15 +1019,12 @@ void updateOled2()
       display2.print("--- BITFABRIK TRX ---");
       display2.setCursor(0, 12);
 
-      if (timeStatus() == timeSet)
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo))
       {
-          time_t utc = now();
-          time_t local = utc + (radio.getUtcOffset() * 3600);
-          if (radio.isDstActive()) local += 3600;
-
           bool isRawUtc = (radio.getUtcOffset() == 0 && !radio.isDstActive());
           display2.printf("%s %02d:%02d:%02d", isRawUtc ? L_TIME_UTC : L_TIME,
-                         hour(local), minute(local), second(local));
+                         timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
       }
       else
           display2.printf("%s %s", L_DIGITAL_MODE, digital.getMode() == 0 ? "Morse" : "RTTY");

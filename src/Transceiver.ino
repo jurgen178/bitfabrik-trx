@@ -1,13 +1,5 @@
 /**
- * ── BITFABRIK Transceiver v3.0 ──────────────────────────────────────────
- * Main Entry Point & Core Orchestrator.
- *
- * ARCHITECTURE OVERVIEW:
- * - Multi-Core: Core 1 handles real-time Radio/UI. Core 0 handles Network/Digital.
- * - Concurrency: Managed via FreeRTOS tasks and Semaphores.
- * - UI Sync: "Updated Flag" pattern prevents I2C/SPI bus congestion.
- * - Input: "Strategy Pattern" for modular rotary encoder handling.
- * ──────────────────────────────────────────────────────────────────────────
+ * ── BITFABRIK Transceiver v1.0 ──────────────────────────────────────────
  */
 
 #include <FFat.h>
@@ -24,15 +16,21 @@
 
 // ── GLOBAL STATE ALLOCATION ───────────────────────────────────────────────
 
-volatile bool g_tx      = false;
+std::atomic<bool> g_tx(false);
+std::atomic<bool> g_mcpOk(false);
+std::atomic<unsigned long> g_lastActivityTime(0);
+SyncState g_sync;
 
 // UI Synchronization
-volatile bool g_guiNeedsUpdate  = true;
+std::atomic<bool> g_guiNeedsUpdate(true);
 TaskHandle_t  g_networkTaskHandle = NULL;
 
 // System Health
 volatile int g_cpuLoad0 = 0;
 volatile int g_cpuLoad1 = 0;
+volatile int g_wifiRssi = -100;
+volatile int g_webClients = 0;
+volatile int g_netActivity = 0;
 
 // Encoder State Machine
 volatile int  g_encPos      = 0;
@@ -61,6 +59,10 @@ SemaphoreHandle_t g_hwMutex;
 
 void setup()
 {
+  Serial.begin(115200);
+  delay(2000); // Give user time to open monitor
+  Serial.println("\n\n--- BITFABRIK Transceiver Start ---");
+
   // Init concurrency locks
   g_mutex = xSemaphoreCreateMutex();
   g_hwMutex = xSemaphoreCreateRecursiveMutex();
@@ -68,9 +70,6 @@ void setup()
   // Basic I/O
   pinMode(LED_RED, OUTPUT);
   digitalWrite(LED_RED, HIGH);
-  Serial.begin(115200);
-  delay(2000); // Give user time to open monitor
-  Serial.println("\n\n" L_STARTUP_MSG);
 
   // FFat Filesystem
   Serial.println("FS: Initializing FFat...");
@@ -99,15 +98,25 @@ void setup()
   if (!mcp.begin_I2C(0x27))
   {
       Serial.println("MCP: ERR - Not found at 0x27");
+      g_mcpOk = false;
   }
   else
   {
       Serial.println("MCP: OK");
+      g_mcpOk = true;
+      // Initialize all 16 pins to a safe state
       for (int i = 0; i < 16; i++)
       {
-          mcp.pinMode(i, OUTPUT);
+          if (i == MCP_PIN_PTT)
+          {
+              mcp.pinMode(i, INPUT_PULLUP);
+          }
+          else
+          {
+              mcp.pinMode(i, OUTPUT);
+              mcp.digitalWrite(i, LOW); // Ensure all relays/PA_ACTIVE are OFF
+          }
       }
-      mcp.pinMode(MCP_PIN_PTT, INPUT_PULLUP);
   }
 
   // Hardware Pin Config
@@ -117,10 +126,8 @@ void setup()
   {
       pinMode(p, OUTPUT);
   }
-  pinMode(PIN_VOLUME_PWM, OUTPUT);
-  pinMode(PIN_PA_PWR_PWM, OUTPUT);
-  pinMode(PIN_TX_PA_ACTIVE, OUTPUT);
-  digitalWrite(PIN_TX_PA_ACTIVE, LOW); // Start with PA disabled
+  pinMode(AUDIO_VOLUME_PWM, OUTPUT);
+  pinMode(ZF_AGC_PWM, OUTPUT);
   pinMode(MIC_CS, OUTPUT);
   digitalWrite(MIC_CS, HIGH);
   pinMode(ENC_A, INPUT);
@@ -188,11 +195,16 @@ void setup()
   radio.selectBand(radio.getBand());
   ui.drawFullUI();
 
-  Serial.println("OS: Starting FreeRTOS Tasks...");
-  // Multi-Core Task Scheduling
-  xTaskCreatePinnedToCore(TaskRadio,   "Radio",   8192, NULL, 3, NULL, 1); // Core 1: Hardware High Priority
+  encManager.begin();
+
+  // Multi-Core Task Scheduling - START LAST
+  Serial.println("OS: Starting Background Services...");
   xTaskCreatePinnedToCore(TaskNetwork, "Network", 8192, NULL, 1, NULL, 0); // Core 0: Comm Background
   xTaskCreatePinnedToCore(TaskDigital, "Digital", 4096, NULL, 2, NULL, 0); // Core 0: FSK Timing
+
+  Serial.println("OS: Starting Radio...");
+  xTaskCreatePinnedToCore(TaskRadio,   "Radio",   8192, NULL, 3, NULL, 1); // Core 1: Hardware High Priority
+
   Serial.println("BOOT COMPLETE.");
 }
 

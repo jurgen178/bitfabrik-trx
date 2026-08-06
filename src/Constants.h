@@ -19,7 +19,6 @@
 #define LANG_DE // Standard auf Deutsch für Tests
 
 #if defined(LANG_DE)
-  #define L_STARTUP_MSG   "--- BITFABRIK Transceiver Start ---"
   #define L_I2C_OK        "I2C initialisiert (400kHz)"
   #define L_MCP_ERR       "MCP23017 Fehler!"
   #define L_MCP_OK        "MCP23017 initialisiert"
@@ -106,7 +105,6 @@
   #define L_UTC_OFFSET    "UTC Versatz"
   #define L_DST           "Sommerzeit"
 #elif defined(LANG_EN)
-  #define L_STARTUP_MSG   "--- BITFABRIK Transceiver Start ---"
   #define L_I2C_OK        "I2C initialized at 400kHz"
   #define L_MCP_ERR       "MCP23017 Error!"
   #define L_MCP_OK        "MCP23017 initialized"
@@ -202,29 +200,29 @@
 // SWR / RSSI Inputs
 constexpr int PIN_SWR_FWD = 2;   // Stockton Forward Voltage
 constexpr int PIN_SWR_REF = 3;   // Stockton Reflected Voltage
-constexpr int PIN_RSSI    = 1;   // Board-Label A0: Signal Strength Input
+constexpr int PIN_S_METER = 1;   // Board-Label A0: Signal Strength Input
 constexpr int PIN_VOX_ADC = 4;   // Board-Label A3: Analog VOX Detector
 
 // DDS Bus (Shared for all AD9850 modules, FQUD is per-module Chip Select)
-constexpr int DDS_DATA  = 8;    // D5: Shared Data Line
-constexpr int DDS_WCLK  = 9;    // D6: Shared Word Clock
-constexpr int DDS_RESET = 17;   // D8: Shared Hardware Reset
+constexpr int DDS_DATA  = 8;    // D5: Shared Data Line (LO & BFO)
+constexpr int DDS_WCLK  = 9;    // D6: Shared Word Clock (LO & BFO)
+constexpr int DDS_RESET = 17;   // D8: Shared Hardware Reset (LO & BFO)
 constexpr int LO_FQUD   = 10;   // D7: Freq Update for LO (VFO)
 constexpr int BFO_FQUD  = 44;   // D0: Freq Update for BFO (Mode)
 
-// Audio & PA Control (PWM Outputs)
-constexpr int      PIN_VOLUME_PWM  = 13;      // A6: TDA7052A DC Gain Control
-constexpr int      VOL_PWM_CHAN    = 0;        // LEDC Channel for legacy ESP cores
-constexpr uint32_t VOL_PWM_FREQ   = 100000;   // 100 kHz — optimal EMV for HF
-constexpr uint8_t  VOL_PWM_RES    = 8;        // 8-Bit resolution (0-255)
-constexpr int      VOL_PWM_MIN    = 23;        // ~0.3 V (Mute threshold)
-constexpr int      VOL_PWM_MAX    = 108;       // ~1.4 V (Max gain)
+// Audio & ZF Power Control (PWM Outputs)
+constexpr int      AUDIO_VOLUME_PWM = 13;      // A6: TDA7052A DC Gain Control
+constexpr int      AUDIO_VOL_PWM_CHAN = 0;     // LEDC Channel for legacy ESP cores
+constexpr uint32_t AUDIO_VOL_PWM_FREQ = 100000; // 100 kHz — optimal EMV for HF
+constexpr uint8_t  AUDIO_VOL_PWM_RES  = 8;     // 8-Bit resolution (0-255)
+constexpr int      AUDIO_VOL_PWM_MIN  = 23;     // ~0.3 V (Mute threshold)
+constexpr int      AUDIO_VOL_PWM_MAX  = 108;    // ~1.4 V (Max gain)
 
-constexpr int      PIN_PA_PWR_PWM  = 14;      // A7: Variable PA Bias / Driver Level
-constexpr int      PA_PWR_PWM_CHAN = 1;        // LEDC Channel 1
-constexpr uint32_t PA_PWR_PWM_FREQ = 100000;
-constexpr uint8_t  PA_PWR_PWM_RES  = 8;
-constexpr int      PA_PWR_MIN      = 126;      // FET Bias Start Point (0-255)
+constexpr int      ZF_AGC_PWM = 14;           // A7: ZF Gain / Vorverstärkung
+constexpr int      ZF_AGC_PWM_CHAN = 1;        // LEDC Channel 1
+constexpr uint32_t ZF_AGC_PWM_FREQ = 100000;
+constexpr uint8_t  ZF_AGC_PWM_RES  = 8;
+constexpr int      ZF_AGC_MIN      = 126;      // Gain Start Point (0-255)
 
 // SPI Bus — TFT Display
 constexpr int TFT_SCK  = 48;   // D13
@@ -240,13 +238,9 @@ constexpr int ENC_A   = D2;    // Optical Channel A
 constexpr int ENC_B   = D3;    // Optical Channel B
 constexpr int ENC_BTN = D4;    // Integrated Push Button
 
-// Native GPIO
-constexpr int PIN_TX_PA_ACTIVE = 14; // A7: Hardware enable for PA Stage
-
 // MCP23017 Pin Assignments (I2C expander — NOT native GPIO!)
-constexpr int MCP_RELAY_TXRX  = 7;  // Main antenna switch relay
-constexpr int MCP_PIN_PA_BIAS = 6;  // PA transistor bias enable
-constexpr int MCP_PIN_PTT     = 14; // PTT button input (GPA6)
+constexpr int MCP_TX_PA_ACTIVE = 7;  // Main TX/PA Activation Signal (GPA7)
+constexpr int MCP_PIN_PTT      = 14; // PTT button input (GPA6)
 
 // ── HARDWARE PARAMETERS ───────────────────────────────────────────────────
 constexpr double REF_FREQ = 125000000.0; // AD9850 Reference Clock

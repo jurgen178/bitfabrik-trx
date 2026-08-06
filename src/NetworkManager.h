@@ -21,6 +21,7 @@ private:
     unsigned long _lastStatsTime = 0;
 
     void _setupRoutes();
+    String _buildStatusJson();
     void _onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 
 public:
@@ -31,7 +32,7 @@ public:
     void process(); // To be called from TaskNetwork
 
     // ── Communication ──
-    void broadcastStatus();
+    void broadcastStatus(bool force = false);
     void sendToAll(const String& msg);
     void sendRxEvent(char c); // Push one decoded RX character to all WebSocket clients + SSE
 

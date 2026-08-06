@@ -100,6 +100,7 @@ private:
 
 public:
     EncoderManager();
+    void begin();
     void setMode(EncoderMode mode);
     void cycleMode();
     void handleRotation(int delta);

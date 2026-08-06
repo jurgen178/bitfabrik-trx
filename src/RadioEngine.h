@@ -21,14 +21,14 @@ private:
     volatile bool _usb = false;        // true = USB, false = LSB
     int  _stepIdx = 1;                 // Index for tuning steps (100Hz default)
 
-    long _ritOffset = 0;               // Receiver Incremental Tuning offset (Hz)
-    bool _ritEnabled = false;          // RIT toggle
+    volatile long _ritOffset = 0;               // Receiver Incremental Tuning offset (Hz)
+    volatile bool _ritEnabled = false;          // RIT toggle
     double _bfoUsb = 9001500.0;        // Calibrated USB carrier offset
     double _bfoLsb = 8998500.0;        // Calibrated LSB carrier offset
 
     VfoState _vfoA = { 7100000, 3, false, false }; // State for VFO A (40m LSB)
     VfoState _vfoB = { 14200000, 2, true, false };  // State for VFO B (20m USB)
-    int      _activeVfo = 0;                 // Current selection
+    volatile int      _activeVfo = 0;                 // Current selection
     VfoState  _memChannels[NUM_MEM_CHANNELS]; // Persistent memory slots
     uint32_t  _memRevision = 0;               // Incremented on every memStore()
     long _bandFreqs[6];                      // Per-band frequency memory
@@ -36,9 +36,9 @@ private:
     int  _lastRelayBand = -1;                // Cache for I2C efficiency
 
     // ── VOX Settings ──
-    bool _voxEnabled = false;
-    int  _voxThreshold = 1000;               // ADC threshold (0-4095)
-    int  _voxDelay = 500;                    // Hang time in ms
+    volatile bool _voxEnabled = false;
+    volatile int  _voxThreshold = 1000;               // ADC threshold (0-4095)
+    volatile int  _voxDelay = 500;                    // Hang time in ms
 
     // ── Time & Location ──
     int  _utcOffset = 1;                     // Hours relative to UTC (e.g. +1 for Germany)
@@ -169,6 +169,13 @@ public:
     // Persistence helpers (friend access for save/load)
     void loadFromPreferences();
     void saveToPreferences();
+
+private:
+    // Internal hardware-near methods (must be called with g_hwMutex held!)
+    void _updateLOInternal();
+    void _updateBFOInternal();
+    void _updateBandRelaysInternal(int oldIdx, int newIdx);
+    void _selectBandInternal(int idx);
 };
 
 extern RadioEngine radio;

@@ -1,6 +1,7 @@
 #include "RadioEngine.h"
 #include "Hardware.h"
 #include "Display.h"
+#include "NetworkManager.h"
 #include "SettingsManager.h"
 #include <ArduinoJson.h>
 #include <FFat.h>
@@ -18,6 +19,15 @@ RadioEngine::RadioEngine()
 
 void RadioEngine::updateLO()
 {
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        _updateLOInternal();
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
+}
+
+void RadioEngine::_updateLOInternal()
+{
   double calcFreq = (double)_freq;
   // Apply Clarifier offset ONLY in RX mode
   if (!g_tx && _ritEnabled)
@@ -29,49 +39,74 @@ void RadioEngine::updateLO()
 
 void RadioEngine::updateBFO()
 {
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        _updateBFOInternal();
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
+}
+
+void RadioEngine::_updateBFOInternal()
+{
   dds_setFreq(_usb ? _bfoUsb : _bfoLsb, BFO_FQUD);
 }
 
 void RadioEngine::updateBandRelays()
 {
     if (_band == _lastRelayBand)
-        return; // Prevent redundant I2C traffic
+        return;
 
-    if (xSemaphoreTakeRecursive(g_hwMutex, pdMS_TO_TICKS(50)))
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        Serial.printf("MCP: Updating Band Filters for %s\n", BANDS[_band].name);
-        int rxTarget = BANDS[_band].rxRelay;
-        int txTarget = BANDS[_band].txRelay;
-
-        // Set RX Bank (Pins 0-5)
-        for (int i = 0; i <= 5; i++)
-        {
-            mcp.digitalWrite(i, (i == rxTarget) ? HIGH : LOW);
-        }
-
-        // Set TX Bank (Pins 8-13)
-        for (int i = 8; i <= 13; i++)
-        {
-            mcp.digitalWrite(i, (i == txTarget) ? HIGH : LOW);
-        }
-
+        _updateBandRelaysInternal(_lastRelayBand, _band);
         _lastRelayBand = _band;
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
 
+void RadioEngine::_updateBandRelaysInternal(int oldIdx, int newIdx)
+{
+    // 1. Turn OFF the previous band if valid and different from new
+    if (oldIdx >= 0 && oldIdx < NUM_BANDS && oldIdx != newIdx)
+    {
+        mcp.digitalWrite(BANDS[oldIdx].rxRelay, LOW);
+        mcp.digitalWrite(BANDS[oldIdx].txRelay, LOW);
+    }
+    // 2. Turn ON the new band
+    if (newIdx >= 0 && newIdx < NUM_BANDS)
+    {
+        mcp.digitalWrite(BANDS[newIdx].rxRelay, HIGH);
+        mcp.digitalWrite(BANDS[newIdx].txRelay, HIGH);
+    }
+}
+
 void RadioEngine::refreshRelays()
 {
-    _lastRelayBand = -1; // Force re-application regardless of cached state
-    updateBandRelays();
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        _updateBandRelaysInternal(-1, _band); // Force current band to ON
+        _lastRelayBand = _band;
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
 }
 
 void RadioEngine::selectBand(int idx)
+{
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        _selectBandInternal(idx);
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
+}
+
+void RadioEngine::_selectBandInternal(int idx)
 {
   if (idx < 0 || idx >= NUM_BANDS || !BANDS[idx].enabled)
   {
       return;
   }
+
+  int oldBand = _band;
 
   // Save current frequency to band memory
   _bandFreqs[_band] = _freq;
@@ -82,10 +117,12 @@ void RadioEngine::selectBand(int idx)
   // ALWAYS use the sideband defined in the BANDS table (Source of Truth)
   _usb  = BANDS[idx].sideBand;
 
-  updateBandRelays();
-  updateLO();
-  updateBFO();
+  _updateBandRelaysInternal(oldBand, _band);
+  _lastRelayBand = _band;
+  _updateLOInternal();
+  _updateBFOInternal();
   g_guiNeedsUpdate = true;
+  
 }
 
 void RadioEngine::setStepIdx(int idx)
@@ -93,34 +130,35 @@ void RadioEngine::setStepIdx(int idx)
     _stepIdx = idx;
     g_guiNeedsUpdate = true;
     settings.setUpdated();
+    
 }
 
 void RadioEngine::setUnlockedRange(bool en)
 {
     _unlockedRange = en;
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::setVoxEnabled(bool en)
 {
     _voxEnabled = en;
     settings.setUpdated();
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::setVoxThreshold(int val)
 {
     _voxThreshold = constrain(val, 0, 4095);
     settings.setUpdated();
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::setVoxDelay(int ms)
 {
     _voxDelay = constrain(ms, 0, 5000);
     settings.setUpdated();
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::saveActiveToVfo()
@@ -156,6 +194,7 @@ void RadioEngine::switchVfo(int target)
   updateLO();
   updateBFO();
   g_guiNeedsUpdate = true;
+  
 }
 
 void RadioEngine::vfoCopy()
@@ -169,6 +208,7 @@ void RadioEngine::vfoCopy()
       _vfoA = { (long)_freq, (int)_band, (bool)_usb };
   }
   g_guiNeedsUpdate = true;
+  g_sync.vfoCopyFlash = true;
 }
 
 void RadioEngine::memStore(int ch)
@@ -179,7 +219,7 @@ void RadioEngine::memStore(int ch)
     _memRevision++;
     settings.setUpdated(); // Trigger auto-save to Flash
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
+    
   }
 }
 
@@ -200,6 +240,7 @@ void RadioEngine::memRecall(int ch)
   updateLO();
   updateBFO();
   g_guiNeedsUpdate = true;
+  
 }
 
 void RadioEngine::memDelete(int ch)
@@ -210,7 +251,7 @@ void RadioEngine::memDelete(int ch)
     _memRevision++;
     settings.setUpdated(); // Trigger auto-save
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
+    
   }
 }
 
@@ -274,9 +315,13 @@ void RadioEngine::saveBandsToJson()
 void RadioEngine::setFrequency(long f)
 {
     _freq = constrain(f, getMinFreq(), getMaxFreq());
-    updateLO();
+    if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+    {
+        _updateLOInternal();
+        xSemaphoreGiveRecursive(g_hwMutex);
+    }
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
+    
 }
 
 long RadioEngine::getMinFreq() const
@@ -294,6 +339,7 @@ void RadioEngine::setRitEnabled(bool en)
     _ritEnabled = en;
     updateLO();
     g_guiNeedsUpdate = true;
+    
 }
 
 void RadioEngine::setRitOffset(long offset)
@@ -304,21 +350,21 @@ void RadioEngine::setRitOffset(long offset)
         updateLO();
     }
     g_guiNeedsUpdate = true;
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::setUtcOffset(int hours)
 {
     _utcOffset = hours;
     settings.setUpdated();
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::setDstActive(bool active)
 {
     _dstActive = active;
     settings.setUpdated();
-    notifyWebUpdate();
+    
 }
 
 void RadioEngine::loadFromPreferences()

@@ -55,9 +55,12 @@ public:
     const char* getRxText() const { return _rxText; }
 
     void addRxChar(char c) {
-        if (_rxLen < sizeof(_rxText) - 1) {
-            _rxText[_rxLen++] = c;
-            _rxText[_rxLen]   = '\0';
+        if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5))) {
+            if (_rxLen < sizeof(_rxText) - 1) {
+                _rxText[_rxLen++] = c;
+                _rxText[_rxLen]   = '\0';
+            }
+            xSemaphoreGive(g_mutex);
         }
     }
 

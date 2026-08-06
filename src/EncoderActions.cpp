@@ -198,6 +198,10 @@ void RitHandler::renderFocused(Adafruit_SSD1306 &display)
  */
 EncoderManager::EncoderManager()
 {
+}
+
+void EncoderManager::begin()
+{
     setMode(EncoderMode::Tune);
 }
 
