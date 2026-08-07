@@ -6,6 +6,7 @@
 #include "SettingsManager.h"
 #include "NetworkManager.h"
 #include "DigitalEngine.h"
+#include "LogManager.h"
 #include <SPI.h>
 
 /**
@@ -85,6 +86,7 @@ void dds_reset()
 void setTxRx(bool tx)
 {
   g_tx = tx;
+  logger.notifyTxState(tx);
 
   if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
   {
@@ -147,9 +149,9 @@ SWRResult readSWR()
     xSemaphoreGiveRecursive(g_hwMutex);
   }
 
-  float vF = ((float)fSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
-  float vR = ((float)rSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
-  float vRSSI = ((float)rssiSum/SWR_SAMPLES)*(SWR_V_REF/SWR_ADC_MAX);
+  float vF = (static_cast<float>(fSum) / SWR_SAMPLES) * (SWR_V_REF / SWR_ADC_MAX);
+  float vR = (static_cast<float>(rSum) / SWR_SAMPLES) * (SWR_V_REF / SWR_ADC_MAX);
+  float vRSSI = (static_cast<float>(rssiSum) / SWR_SAMPLES) * (SWR_V_REF / SWR_ADC_MAX);
 
   res.vFwd = compensateDiode(vF);
   res.vRef = compensateDiode(vR);
@@ -158,43 +160,43 @@ SWRResult readSWR()
   // RX Mode: Calculate S-Level
   if (!g_tx && !digital.isBusy())
   {
-  if (vRSSI < 0.05f) {
+    if (vRSSI < 0.05f) {
 #ifdef DEBUG_SIM
-      res.rssi = 0.05f + (float)(random(0, 100)) / 1000.0f; // simulated noise floor
+      res.rssi = 0.05f + static_cast<float>(random(0, 100)) / 1000.0f; // simulated noise floor
 #else
       res.rssi = 0.0f;
 #endif
-  }
+    }
 
-      // Typical S-Unit mapping (example: S9 = 50uV at ant, but here it's DC level from RX)
-      // We map 0..1.0V to S1..S9 for now.
-      res.sLevel = (int)(res.rssi * 9.0f);
-      if (res.sLevel < 1)
-          res.sLevel = 1;
-      if (res.sLevel > 9)
-          res.sLevel = 9;
+    // Typical S-Unit mapping (example: S9 = 50uV at ant, but here it's DC level from RX)
+    // We map 0..1.0V to S1..S9 for now.
+    res.sLevel = static_cast<int>(res.rssi * 9.0f);
+    if (res.sLevel < 1)
+        res.sLevel = 1;
+    if (res.sLevel > 9)
+        res.sLevel = 9;
 
-      res.swr = 1.0f;
-      res.powerW = 0.0f;
+    res.swr = 1.0f;
+    res.powerW = 0.0f;
   }
   else
   {
-      // TX Mode: Calculate SWR/Power
-      res.powerW = res.vFwd * res.vFwd * 4.0f;
-      if (res.vFwd > SWR_MIN_VFWD)
-      {
-        float diff = res.vFwd - res.vRef;
-        res.swr = (diff > 0.001f) ? (res.vFwd + res.vRef)/diff : 9.9f;
-      }
-      else
-      {
-          res.swr = 1.0f;
-      }
-      if (res.swr > 9.9f)
-          res.swr = 9.9f;
-      if (res.swr < 1.0f)
-          res.swr = 1.0f;
-      res.sLevel = 0;
+    // TX Mode: Calculate SWR/Power
+    res.powerW = res.vFwd * res.vFwd * 4.0f;
+    if (res.vFwd > SWR_MIN_VFWD)
+    {
+      float diff = res.vFwd - res.vRef;
+      res.swr = (diff > 0.001f) ? (res.vFwd + res.vRef) / diff : 9.9f;
+    }
+    else
+    {
+        res.swr = 1.0f;
+    }
+    if (res.swr > 9.9f)
+        res.swr = 9.9f;
+    if (res.swr < 1.0f)
+        res.swr = 1.0f;
+    res.sLevel = 0;
   }
 
   return res;
@@ -433,8 +435,9 @@ static void handleDisplayUpdates(unsigned long now)
             if (g_guiNeedsUpdate.exchange(false))
             {
                 ui.update();
-                updateOled1();
+                updateOled1(); // High priority update
                 notifyWebUpdate(); // Hardware state changed — keep web in sync
+                lastOled1Refresh = now; // Sync standalone cycle
             }
             xSemaphoreGiveRecursive(g_hwMutex);
         }
@@ -503,6 +506,7 @@ static void handleSyncState(unsigned long now)
     if (g_sync.updatePending.exchange(false))
     {
         uint32_t mask = g_sync.updateMask.exchange(0);
+        bool silent = (mask & SYNC_NO_UI);
 
         if (mask & SYNC_FREQ)  radio.setFrequency(g_sync.targetFreq.load());
         if (mask & SYNC_BAND)  radio.selectBand(g_sync.targetBand.load());
@@ -519,15 +523,15 @@ static void handleSyncState(unsigned long now)
         if (mask & SYNC_DIGI)  digital.setMode(g_sync.targetDigiMode.load());
         if (mask & SYNC_VOL) {
             audio.setVolume(g_sync.targetVol.load());
-            ui.setMode(DisplayMode::Volume);
+            if (!silent) ui.setMode(DisplayMode::Volume);
         }
         if (mask & SYNC_PWR) {
             audio.setPaPower(g_sync.targetPwr.load());
-            ui.setMode(DisplayMode::Power);
+            if (!silent) ui.setMode(DisplayMode::Power);
         }
         if (mask & SYNC_MIC) {
             audio.setMicGain(g_sync.targetMic.load());
-            ui.setMode(DisplayMode::Mic);
+            if (!silent) ui.setMode(DisplayMode::Mic);
         }
         if (mask & SYNC_VOX) {
             // Check if this was a toggle (from web) or a specific update
@@ -541,7 +545,7 @@ static void handleSyncState(unsigned long now)
 
         if (mask & SYNC_MODE) {
             // We use targetStepIdx as a proxy for mode index to avoid another atomic
-            ui.setMode((DisplayMode)g_sync.targetStepIdx.load());
+            if (!silent) ui.setMode(static_cast<DisplayMode>(g_sync.targetStepIdx.load()));
         }
 
         g_guiNeedsUpdate = true;

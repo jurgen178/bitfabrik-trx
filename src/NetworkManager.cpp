@@ -6,10 +6,12 @@
 #include "Hardware.h"
 #include "DigitalEngine.h"
 #include "EncoderActions.h"
+#include "LogManager.h"
 #include <WiFi.h>
 #include "arduino_secrets.h"
 
 #include "TransceiverEditorHtml.h"
+#include "TransceiverLogHtml.h"
 #include <FFat.h>
 #include <ArduinoJson.h>
 #include <time.h>
@@ -235,8 +237,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         <div class="status-line"><span>VOX Delay (ms)</span><span id="vox_delay_val" style="color:var(--accent)">500ms</span></div>
         <input type="range" id="vox_delay_slider" class="slider" min="0" max="5000" step="50" oninput="setVoxDelay(this.value)">
       </div>
-      <div style="margin-top:20px; border-top: 1px solid #2d3748; padding-top:15px; text-align:center">
-        <button class="btn" style="width:100%; background:#00aaff; color:white; font-weight:bold" onclick="location.href='/bands'">BAND TABELLE</button>
+      <div style="margin-top:20px; border-top: 1px solid #2d3748; padding-top:15px; display:grid; grid-template-columns: 1fr 1fr; gap:10px">
+        <button class="btn" style="background:#00aaff; color:white; font-weight:bold" onclick="location.href='/bands'">BAND TABELLE</button>
+        <button class="btn" style="background:#00ff88; color:#121417; font-weight:bold" onclick="location.href='/log'">SENDE LOG</button>
       </div>
     </div>
   </div>
@@ -660,12 +663,12 @@ const char index_html[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 // Internal helper for static access within AsyncWebServer callbacks
-static NetworkManager* _instance = nullptr;
-static uint32_t _netPktCounter = 0;
+static NetworkManager* instance = nullptr;
+static std::atomic<uint32_t> netPktCounter(0);
 
-NetworkManager::NetworkManager() : _server(80), _ws("/ws"), _sse("/api/v1/rx/stream")
+NetworkManager::NetworkManager() : server(80), ws("/ws"), sse("/api/v1/rx/stream")
 {
-    _instance = this;
+    instance = this;
 }
 
 void NetworkManager::begin()
@@ -707,22 +710,22 @@ void NetworkManager::begin()
     Serial.print("MAC Address: ");
     Serial.println(WiFi.macAddress());
 
-    _ws.onEvent([this](AsyncWebSocket *s, AsyncWebSocketClient *c, AwsEventType t, void *arg, uint8_t *d, size_t l)
+    ws.onEvent([this](AsyncWebSocket *s, AsyncWebSocketClient *c, AwsEventType t, void *arg, uint8_t *d, size_t l)
     {
-        this->_onWsEvent(s, c, t, arg, d, l);
+        onWsEvent(s, c, t, arg, d, l);
     });
 
-    _server.addHandler(&_ws);
-    _server.addHandler(&_sse);
+    server.addHandler(&ws);
+    server.addHandler(&sse);
 
-    _setupRoutes();
-    _server.begin();
+    setupRoutes();
+    server.begin();
 
     // Start native, asynchronous ESP32 SNTP client
     configTime(radio.getUtcOffset() * 3600, radio.isDstActive() ? 3600 : 0, "pool.ntp.org", "time.nist.gov");
     Serial.println("SNTP: Native background engine started");
 
-    _lastStatsTime = millis();
+    lastStatsTime = millis();
 }
 
 void NetworkManager::process()
@@ -730,19 +733,20 @@ void NetworkManager::process()
     uint32_t startWork = micros();
     unsigned long nowMs = millis();
 
-    if (nowMs - _lastWsCleanup > 2000)
+    if (nowMs - lastWsCleanup > 2000)
     {
-        _ws.cleanupClients();
-        _lastWsCleanup = nowMs;
+        ws.cleanupClients();
+        lastWsCleanup = nowMs;
     }
 
     // Push unified status whenever process() is called (triggered by events)
     broadcastStatus();
+    logger.process();
 
-    _workTimeAccum += (micros() - startWork);
-    if (nowMs - _lastStatsTime > 1000)
+    workTimeAccum += (micros() - startWork);
+    if (nowMs - lastStatsTime > 1000)
     {
-        g_cpuLoad0 = (_workTimeAccum * 100) / ((nowMs - _lastStatsTime) * 1000);
+        g_cpuLoad0 = (workTimeAccum * 100) / ((nowMs - lastStatsTime) * 1000);
         if (WiFi.status() == WL_CONNECTED)
         {
             g_cpuLoad0 += 8;
@@ -753,16 +757,15 @@ void NetworkManager::process()
             g_wifiRssi = -100;
         }
 
-        g_webClients = _ws.count();
-        g_netActivity = _netPktCounter;
-        _netPktCounter = 0;
+        g_webClients = ws.count();
+        g_netActivity = netPktCounter.exchange(0);
 
         if (g_cpuLoad0 > 100)
         {
             g_cpuLoad0 = 100;
         }
-        _workTimeAccum = 0;
-        _lastStatsTime = nowMs;
+        workTimeAccum = 0;
+        lastStatsTime = nowMs;
     }
 }
 
@@ -784,17 +787,20 @@ void NetworkManager::broadcastStatus(bool force)
 
     if (now - lastBroadcast < interval) return;
 
-    _netPktCounter++;
-    _ws.textAll("JSON_STATUS:" + _buildStatusJson());
+    netPktCounter.fetch_add(1);
+    String msg;
+    msg.reserve(1300);
+    msg = "JSON_STATUS:";
+    buildStatusJson(msg);
+    ws.textAll(msg);
     lastBroadcast = now;
 }
 
-String NetworkManager::_buildStatusJson()
+void NetworkManager::buildStatusJson(String& json)
 {
-    String json;
-    json.reserve(1280);
-    json = "{";
+    json += "{";
     json += "\"full\":true,";
+    // ... rest of JSON logic ...
 
     String mName = "RADIO";
     int mIdx = g_sync.currModeIdx.load();
@@ -853,14 +859,17 @@ String NetworkManager::_buildStatusJson()
         json += ",\"band\":" + String(g_sync.memMirror[i].band.load()) + "}";
     }
     json += "]}";
-    return json;
 }
 
-void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
+void NetworkManager::onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len)
 {
     if (type == WS_EVT_CONNECT)
     {
-        client->text("JSON_STATUS:" + _buildStatusJson());
+        String msg;
+        msg.reserve(1300);
+        msg = "JSON_STATUS:";
+        buildStatusJson(msg);
+        client->text(msg);
         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(10)))
         {
             const char* log = digital.getRxText();
@@ -874,12 +883,12 @@ void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *cl
     }
     else if (type == WS_EVT_DATA)
     {
-        _netPktCounter++;
+        netPktCounter.fetch_add(1);
         AwsFrameInfo *info = (AwsFrameInfo*)arg;
         if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT)
         {
             data[len] = 0;
-            String msg = (char*)data;
+            String msg = reinterpret_cast<char*>(data);
             if (msg.startsWith("SET:"))
             {
                 g_lastActivityTime.store(millis());
@@ -893,10 +902,10 @@ void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *cl
 
                     if (key == "ui_mode") {
                         int modeIdx = 0;
-                        if (val == "GEN") modeIdx = (int)DisplayMode::Generator;
-                        else if (val == "SETTINGS") modeIdx = (int)DisplayMode::Settings;
-                        else if (val == "RIT") modeIdx = (int)DisplayMode::Rit;
-                        else modeIdx = (int)DisplayMode::Radio;
+                        if (val == "GEN") modeIdx = static_cast<int>(DisplayMode::Generator);
+                        else if (val == "SETTINGS") modeIdx = static_cast<int>(DisplayMode::Settings);
+                        else if (val == "RIT") modeIdx = static_cast<int>(DisplayMode::Rit);
+                        else modeIdx = static_cast<int>(DisplayMode::Radio);
                         g_sync.targetStepIdx = modeIdx;
                         mask |= SYNC_MODE;
                     }
@@ -952,6 +961,7 @@ void NetworkManager::_onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *cl
 
                     if (!digital.isBusy())
                     {
+                        digital.setActionType("EMAIL");
                         String formatted = (gw == "js8") ? "@APRSIS CMD :EMAIL-2 :" + to + " " + body + " {01}" : "EMAIL-2 :" + to + " " + body;
                         if (formatted.length() > 100) formatted = formatted.substring(0, 100);
                         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(50)))
@@ -976,19 +986,24 @@ String NetworkManager::getActiveIP()
     return WiFi.softAPIP().toString();
 }
 
-void NetworkManager::_setupRoutes()
+void NetworkManager::setupRoutes()
 {
-    _server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
     {
-        request->send(200, "text/html; charset=utf-8", _instance->getIndexHtml());
+        request->send(200, "text/html; charset=utf-8", instance->getIndexHtml());
     });
 
-    _server.on("/bands", HTTP_GET, [](AsyncWebServerRequest *request)
+    server.on("/bands", HTTP_GET, [](AsyncWebServerRequest *request)
     {
         request->send(200, "text/html", CONFIG_EDITOR_HTML);
     });
 
-    _server.on("/bands.json", HTTP_GET, [](AsyncWebServerRequest *request)
+    server.on("/log", HTTP_GET, [](AsyncWebServerRequest *request)
+    {
+        request->send(200, "text/html", LOG_EDITOR_HTML);
+    });
+
+    server.on("/bands.json", HTTP_GET, [](AsyncWebServerRequest *request)
     {
         if (FFat.exists("/bands.json")) {
             request->send(FFat, "/bands.json", "application/json");
@@ -1013,7 +1028,7 @@ void NetworkManager::_setupRoutes()
         }
     });
 
-    _server.on("/bands.json", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+    server.on("/bands.json", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
             if (index == 0) request->_tempObject = new String();
             String *buf = static_cast<String*>(request->_tempObject);
@@ -1033,7 +1048,7 @@ void NetworkManager::_setupRoutes()
             }
     });
 
-    _server.on("/bands.json", HTTP_DELETE, [](AsyncWebServerRequest *request)
+    server.on("/bands.json", HTTP_DELETE, [](AsyncWebServerRequest *request)
     {
         if (FFat.exists("/bands.json")) {
             FFat.remove("/bands.json");
@@ -1045,24 +1060,27 @@ void NetworkManager::_setupRoutes()
         }
     });
 
-    _server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest *request)
+    server.on("/api/v1/status", HTTP_GET, [](AsyncWebServerRequest *request)
     {
-        request->send(200, "application/json", _instance->_buildStatusJson());
+        String msg;
+        msg.reserve(1300);
+        instance->buildStatusJson(msg);
+        request->send(200, "application/json", msg);
     });
 
-    _server.on("/api/v1/control", HTTP_ANY, [](AsyncWebServerRequest *request)
+    server.on("/api/v1/control", HTTP_ANY, [](AsyncWebServerRequest *request)
     {
         bool handled = false;
-        uint32_t mask = 0;
+        uint32_t mask = SYNC_NO_UI; // Default: Automation/REST is silent
 
         if (request->hasParam("ui_mode"))
         {
             String m = request->getParam("ui_mode")->value();
             int modeIdx = 0;
-            if (m == "GEN") modeIdx = (int)DisplayMode::Generator;
-            else if (m == "SETTINGS") modeIdx = (int)DisplayMode::Settings;
-            else if (m == "RIT") modeIdx = (int)DisplayMode::Rit;
-            else modeIdx = (int)DisplayMode::Radio;
+            if (m == "GEN") modeIdx = static_cast<int>(DisplayMode::Generator);
+            else if (m == "SETTINGS") modeIdx = static_cast<int>(DisplayMode::Settings);
+            else if (m == "RIT") modeIdx = static_cast<int>(DisplayMode::Rit);
+            else modeIdx = static_cast<int>(DisplayMode::Radio);
 
             g_sync.targetStepIdx = modeIdx; // Proxy for mode switch
             mask |= SYNC_MODE;
@@ -1181,13 +1199,14 @@ void NetworkManager::_setupRoutes()
         }
     });
 
-    _server.on("/api/v1/email", HTTP_ANY, [](AsyncWebServerRequest *request)
+    server.on("/api/v1/email", HTTP_ANY, [](AsyncWebServerRequest *request)
     {
         if (digital.isBusy())
         {
             request->send(409, "text/plain", "BUSY");
             return;
         }
+        digital.setActionType("EMAIL");
         String to = request->getParam("to")->value();
         String msg = request->getParam("msg")->value();
         String gw = request->getParam("gw")->value();
@@ -1202,7 +1221,7 @@ void NetworkManager::_setupRoutes()
         request->send(200, "text/plain", "OK");
     });
 
-    _server.on("/api/v1/transmit", HTTP_ANY, [](AsyncWebServerRequest *request)
+    server.on("/api/v1/transmit", HTTP_ANY, [](AsyncWebServerRequest *request)
     {
         if (digital.isBusy())
         {
@@ -1220,6 +1239,51 @@ void NetworkManager::_setupRoutes()
             notifyWebUpdate();
         }
         request->send(200, "text/plain", "OK");
+    });
+
+    server.on("/log.json", HTTP_GET, [](AsyncWebServerRequest *request)
+    {
+        if (FFat.exists("/tx_log.json")) {
+            File file = FFat.open("/tx_log.json", "r");
+            if (file) {
+                DynamicJsonDocument doc(8192); // Adjust size as needed for log length
+                DeserializationError error = deserializeJson(doc, file);
+                file.close();
+                if (!error) {
+                    String output;
+                    serializeJsonPretty(doc, output);
+                    request->send(200, "application/json", output);
+                    return;
+                }
+            }
+            request->send(FFat, "/tx_log.json", "application/json");
+        } else {
+            request->send(200, "application/json", "[]");
+        }
+    });
+
+    server.on("/log.json", HTTP_DELETE, [](AsyncWebServerRequest *request)
+    {
+        logger.clearLog();
+        request->send(200, "text/plain", "Log cleared");
+    });
+
+    server.on("/log.json", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            if (index == 0) request->_tempObject = new String();
+            String *buf = static_cast<String*>(request->_tempObject);
+            buf->concat(reinterpret_cast<const char*>(data), len);
+            if (index + len == total) {
+                File file = FFat.open("/tx_log.json", "w");
+                if (file) {
+                    file.print(*buf);
+                    file.close();
+                    request->send(200, "text/plain", "OK");
+                } else {
+                    request->send(500, "text/plain", "Failed to save log");
+                }
+                delete buf;
+            }
     });
 }
 
@@ -1240,8 +1304,8 @@ static int getBandIndexByName(String name)
 
 void NetworkManager::sendRxEvent(char c)
 {
-    _ws.textAll("RX:" + String(c));
-    _sse.send(String(c).c_str(), "rx_char");
+    ws.textAll("RX:" + String(c));
+    sse.send(String(c).c_str(), "rx_char");
 }
 
 String NetworkManager::getIndexHtml()

@@ -16,16 +16,16 @@ void SettingsManager::begin()
 
 void SettingsManager::setUpdated()
 {
-    _lastActivity = millis();
-    _isUpdated = true;
+    lastActivity = millis();
+    isUpdated = true;
 }
 
 void SettingsManager::process()
 {
-    if (_isUpdated && (millis() - _lastActivity > 5000))
+    if (isUpdated && (millis() - lastActivity > 5000))
     {
         saveAll();
-        _isUpdated = false;
+        isUpdated = false;
     }
 }
 
@@ -45,14 +45,9 @@ void SettingsManager::loadAll()
     radio.setVoxDelay(preferences.getInt("vox_delay", 500));
 
     // Load Audio settings (moved from Transceiver.ino)
-    int vol = preferences.getInt("volume", 50);
-    int pwr = preferences.getInt("pa_pwr", 100);
-    int mic = preferences.getInt("mic_gain", 50);
-
-    // Note: AudioManager::begin() will call its own setters if we want,
-    // but here we just set the values and let audio.begin() handle the rest
-    // if it's called after this.
-    // However, audio.begin() is called in setup().
+    audio.setVolume(preferences.getInt("volume", 50));
+    audio.setPaPower(preferences.getInt("pa_pwr", 100));
+    audio.setMicGain(preferences.getInt("mic_gain", 50));
 
     preferences.end();
 }

@@ -21,15 +21,15 @@
 // ── LovyanGFX Driver Configuration (Hosyond 4.0" TN) ────────────────────────
 class LGFX_TRX : public lgfx::LGFX_Device
 {
-  lgfx::Panel_ST7796  _panel_instance;
-  lgfx::Bus_SPI       _bus_instance;
-  lgfx::Touch_FT5x06  _touch_instance; // Compatible with FT6336U
+  lgfx::Panel_ST7796  panelInstance;
+  lgfx::Bus_SPI       busInstance;
+  lgfx::Touch_FT5x06  touchInstance; // Compatible with FT6336U
 
 public:
   LGFX_TRX()
   {
     {
-      auto cfg = _bus_instance.config();
+      auto cfg = busInstance.config();
       cfg.spi_host = SPI3_HOST;
       cfg.spi_mode = 0;
       cfg.freq_write = 20000000;
@@ -38,20 +38,20 @@ public:
       cfg.pin_mosi = TFT_MOSI;
       cfg.pin_miso = TFT_MISO;
       cfg.pin_dc   = TFT_DC;
-      _bus_instance.config(cfg);
-      _panel_instance.setBus(&_bus_instance);
+      busInstance.config(cfg);
+      panelInstance.setBus(&busInstance);
     }
     {
-      auto cfg = _panel_instance.config();
+      auto cfg = panelInstance.config();
       cfg.pin_cs           = TFT_CS;
       cfg.pin_rst          = TFT_RST; // Pin A0
       cfg.panel_width      = 320;
       cfg.panel_height     = 480;
       cfg.bus_shared       = true;
-      _panel_instance.config(cfg);
+      panelInstance.config(cfg);
     }
     {
-      auto cfg = _touch_instance.config();
+      auto cfg = touchInstance.config();
       cfg.x_min      = 0;
       cfg.x_max      = 319;
       cfg.y_min      = 0;
@@ -61,10 +61,10 @@ public:
       cfg.i2c_port   = 0;  // Shared I2C port
       cfg.i2c_addr   = 0x38;
       cfg.freq       = 400000;
-      _touch_instance.config(cfg);
-      _panel_instance.setTouch(&_touch_instance);
+      touchInstance.config(cfg);
+      panelInstance.setTouch(&touchInstance);
     }
-    setPanel(&_panel_instance);
+    setPanel(&panelInstance);
   }
 };
 
@@ -80,12 +80,6 @@ struct Band
   int         txRelay;    // Physischer Slot (0-5) für Senden
   bool        sideBand;   // true = USB, false = LSB (Dynamic)
   bool        enabled;    // Ob dieser Slot bestückt/aktiv ist
-};
-
-struct Preset
-{
-  const char* label;
-  long        freq;
 };
 
 struct VfoState
@@ -184,6 +178,7 @@ struct SyncState
 #define SYNC_VFO_COPY   (1 << 11)
 #define SYNC_MEM_STORE  (1 << 12)
 #define SYNC_MEM_RECALL (1 << 13)
+#define SYNC_NO_UI      (1 << 14) // Do not trigger UI mode switches (for Automation/REST)
 
 extern SyncState g_sync;
 
@@ -256,7 +251,6 @@ SWRResult readSWR();
 // ── Constant Arrays ────────────────────────────────────────────────────────
 
 extern Band BANDS[]; // Now dynamic (loaded from JSON)
-extern const Preset PRESETS[6][3];
 extern const long STEPS[];
 
 #endif

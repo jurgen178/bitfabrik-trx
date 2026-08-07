@@ -13,7 +13,7 @@ RadioEngine::RadioEngine()
     // Initialize band frequencies with defaults from Constants.cpp
     for (int i = 0; i < NUM_BANDS; i++)
     {
-        _bandFreqs[i] = BANDS[i].freqDefault;
+        bandFreqs[i] = BANDS[i].freqDefault;
     }
 }
 
@@ -21,18 +21,18 @@ void RadioEngine::updateLO()
 {
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _updateLOInternal();
+        updateLOInternal();
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
 
-void RadioEngine::_updateLOInternal()
+void RadioEngine::updateLOInternal()
 {
-  double calcFreq = (double)_freq;
+  double calcFreq = static_cast<double>(freq);
   // Apply Clarifier offset ONLY in RX mode
-  if (!g_tx && _ritEnabled)
+  if (!g_tx && ritEnabled)
   {
-      calcFreq += (double)_ritOffset;
+      calcFreq += static_cast<double>(ritOffset);
   }
   dds_setFreq(calcFreq + ZF_FREQ, LO_FQUD);
 }
@@ -41,30 +41,30 @@ void RadioEngine::updateBFO()
 {
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _updateBFOInternal();
+        updateBFOInternal();
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
 
-void RadioEngine::_updateBFOInternal()
+void RadioEngine::updateBFOInternal()
 {
-  dds_setFreq(_usb ? _bfoUsb : _bfoLsb, BFO_FQUD);
+  dds_setFreq(usb ? bfoUsb : bfoLsb, BFO_FQUD);
 }
 
 void RadioEngine::updateBandRelays()
 {
-    if (_band == _lastRelayBand)
+    if (band == lastRelayBand)
         return;
 
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _updateBandRelaysInternal(_lastRelayBand, _band);
-        _lastRelayBand = _band;
+        updateBandRelaysInternal(lastRelayBand, band);
+        lastRelayBand = band;
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
 
-void RadioEngine::_updateBandRelaysInternal(int oldIdx, int newIdx)
+void RadioEngine::updateBandRelaysInternal(int oldIdx, int newIdx)
 {
     // 1. Turn OFF the previous band if valid and different from new
     if (oldIdx >= 0 && oldIdx < NUM_BANDS && oldIdx != newIdx)
@@ -84,8 +84,8 @@ void RadioEngine::refreshRelays()
 {
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _updateBandRelaysInternal(-1, _band); // Force current band to ON
-        _lastRelayBand = _band;
+        updateBandRelaysInternal(-1, band); // Force current band to ON
+        lastRelayBand = band;
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
@@ -94,118 +94,112 @@ void RadioEngine::selectBand(int idx)
 {
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _selectBandInternal(idx);
+        selectBandInternal(idx);
         xSemaphoreGiveRecursive(g_hwMutex);
+        settings.setUpdated();
     }
 }
 
-void RadioEngine::_selectBandInternal(int idx)
+void RadioEngine::selectBandInternal(int idx)
 {
   if (idx < 0 || idx >= NUM_BANDS || !BANDS[idx].enabled)
   {
       return;
   }
 
-  int oldBand = _band;
+  int oldBand = band;
 
   // Save current frequency to band memory
-  _bandFreqs[_band] = _freq;
+  bandFreqs[band] = freq;
 
-  _band = idx;
-  _freq = _bandFreqs[idx];
+  band = idx;
+  freq = bandFreqs[idx];
 
   // ALWAYS use the sideband defined in the BANDS table (Source of Truth)
-  _usb  = BANDS[idx].sideBand;
+  usb  = BANDS[idx].sideBand;
 
-  _updateBandRelaysInternal(oldBand, _band);
-  _lastRelayBand = _band;
-  _updateLOInternal();
-  _updateBFOInternal();
+  updateBandRelaysInternal(oldBand, band);
+  lastRelayBand = band;
+  updateLOInternal();
+  updateBFOInternal();
   g_guiNeedsUpdate = true;
-  
 }
 
-void RadioEngine::setStepIdx(int idx)
+void RadioEngine::setStepIdx(int newIdx)
 {
-    _stepIdx = idx;
+    stepIdx = newIdx;
     g_guiNeedsUpdate = true;
     settings.setUpdated();
-    
 }
 
-void RadioEngine::setUnlockedRange(bool en)
+void RadioEngine::setUnlockedRange(bool enabled)
 {
-    _unlockedRange = en;
+    unlockedRange = enabled;
     g_guiNeedsUpdate = true;
-    
 }
 
-void RadioEngine::setVoxEnabled(bool en)
+void RadioEngine::setVoxEnabled(bool enabled)
 {
-    _voxEnabled = en;
+    voxEnabled = enabled;
     settings.setUpdated();
-    
 }
 
-void RadioEngine::setVoxThreshold(int val)
+void RadioEngine::setVoxThreshold(int threshold)
 {
-    _voxThreshold = constrain(val, 0, 4095);
+    voxThreshold = constrain(threshold, 0, 4095);
     settings.setUpdated();
-    
 }
 
 void RadioEngine::setVoxDelay(int ms)
 {
-    _voxDelay = constrain(ms, 0, 5000);
+    voxDelay = constrain(ms, 0, 5000);
     settings.setUpdated();
-    
 }
 
 void RadioEngine::saveActiveToVfo()
 {
-  if (_activeVfo == 0)
+  if (activeVfo == 0)
   {
-      _vfoA = { (long)_freq, (int)_band, (bool)_usb };
+      vfoA = { static_cast<long>(freq), static_cast<int>(band), static_cast<bool>(usb) };
   }
   else
   {
-      _vfoB = { (long)_freq, (int)_band, (bool)_usb };
+      vfoB = { static_cast<long>(freq), static_cast<int>(band), static_cast<bool>(usb) };
   }
 }
 
 void RadioEngine::switchVfo(int target)
 {
-  if (target == _activeVfo)
+  if (target == activeVfo)
   {
       return;
   }
   saveActiveToVfo();
-  _activeVfo = target;
-  VfoState& next = (_activeVfo == 0) ? _vfoA : _vfoB;
+  activeVfo = target;
+  VfoState& next = (activeVfo == 0) ? vfoA : vfoB;
 
-  if (next.band != _band)
+  if (next.band != band)
   {
       selectBand(next.band);
   }
 
-  _freq = next.freq;
-  _usb = next.usb;
+  freq = next.freq;
+  usb = next.usb;
 
   updateLO();
   updateBFO();
   g_guiNeedsUpdate = true;
-  
 }
 
 void RadioEngine::vfoCopy()
 {
-  if (_activeVfo == 0)
+  if (activeVfo == 0)
   {
-      _vfoB = { (long)_freq, (int)_band, (bool)_usb };
+      vfoB = { static_cast<long>(freq), static_cast<int>(band), static_cast<bool>(usb) };
   }
   else
   {
-      _vfoA = { (long)_freq, (int)_band, (bool)_usb };
+      vfoA = { static_cast<long>(freq), static_cast<int>(band), static_cast<bool>(usb) };
   }
   g_guiNeedsUpdate = true;
   g_sync.vfoCopyFlash = true;
@@ -215,11 +209,10 @@ void RadioEngine::memStore(int ch)
 {
   if (ch >= 0 && ch < NUM_MEM_CHANNELS)
   {
-    _memChannels[ch] = { (long)_freq, (int)_band, (bool)_usb, true };
-    _memRevision++;
+    memChannels[ch] = { static_cast<long>(freq), static_cast<int>(band), static_cast<bool>(usb), true };
+    memRevision++;
     settings.setUpdated(); // Trigger auto-save to Flash
     g_guiNeedsUpdate = true;
-    
   }
 }
 
@@ -229,29 +222,27 @@ void RadioEngine::memRecall(int ch)
   {
       return;
   }
-  VfoState& m = _memChannels[ch];
+  VfoState& m = memChannels[ch];
   if (!m.occupied) return; // Slot is empty — nothing to recall
-  if (m.band != _band)
+  if (m.band != band)
   {
       selectBand(m.band);
   }
-  _freq = m.freq;
-  _usb = m.usb;
+  freq = m.freq;
+  usb = m.usb;
   updateLO();
   updateBFO();
   g_guiNeedsUpdate = true;
-  
 }
 
 void RadioEngine::memDelete(int ch)
 {
   if (ch >= 0 && ch < NUM_MEM_CHANNELS)
   {
-    _memChannels[ch].occupied = false;
-    _memRevision++;
+    memChannels[ch].occupied = false;
+    memRevision++;
     settings.setUpdated(); // Trigger auto-save
     g_guiNeedsUpdate = true;
-    
   }
 }
 
@@ -274,8 +265,13 @@ void RadioEngine::loadBandsFromJson()
     JsonArray array = doc.as<JsonArray>();
     for (int i = 0; i < array.size() && i < NUM_BANDS; i++) {
         JsonObject obj = array[i];
-        // Map JSON to BANDS array (which is now dynamic)
-        BANDS[i].name        = strdup(obj["id"] | BANDS[i].name);
+
+        // Safety: If band name was changed via JSON, we need to handle the string memory
+        const char* newName = obj["id"] | BANDS[i].name;
+        if (strcmp(newName, BANDS[i].name) != 0) {
+            BANDS[i].name = strdup(newName);
+        }
+
         BANDS[i].freqMin     = obj["min"] | BANDS[i].freqMin;
         BANDS[i].freqMax     = obj["max"] | BANDS[i].freqMax;
         BANDS[i].freqDefault = obj["def"] | BANDS[i].freqDefault;
@@ -312,155 +308,203 @@ void RadioEngine::saveBandsToJson()
     }
 }
 
-void RadioEngine::setFrequency(long f)
+void RadioEngine::setFrequency(long newFreq)
 {
-    _freq = constrain(f, getMinFreq(), getMaxFreq());
+    // Auto-band switching: If target frequency is outside current band,
+    // try to find the correct band in the BANDS table.
+    if (!unlockedRange && (newFreq < BANDS[band].freqMin || newFreq > BANDS[band].freqMax))
+    {
+        for (int i = 0; i < NUM_BANDS; i++)
+        {
+            if (BANDS[i].enabled && newFreq >= BANDS[i].freqMin && newFreq <= BANDS[i].freqMax)
+            {
+                if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
+                {
+                    int oldBand = band;
+                    bandFreqs[band] = freq; // Save current frequency to old band memory
+                    band = i;
+                    freq = newFreq;
+                    usb = BANDS[i].sideBand; // Switch to band-standard sideband
+
+                    updateBandRelaysInternal(oldBand, band);
+                    lastRelayBand = band;
+                    updateLOInternal();
+                    updateBFOInternal();
+
+                    xSemaphoreGiveRecursive(g_hwMutex);
+                    g_guiNeedsUpdate = true;
+                    settings.setUpdated();
+                    return;
+                }
+            }
+        }
+    }
+
+    // Normal tuning (within band or in Unlocked/GEN mode)
+    freq = constrain(newFreq, getMinFreq(), getMaxFreq());
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
-        _updateLOInternal();
+        updateLOInternal();
         xSemaphoreGiveRecursive(g_hwMutex);
     }
     g_guiNeedsUpdate = true;
-    
+    settings.setUpdated();
 }
 
 long RadioEngine::getMinFreq() const
 {
-    return _unlockedRange ? 10L : BANDS[_band].freqMin;
+    return unlockedRange ? 10L : BANDS[band].freqMin;
 }
 
 long RadioEngine::getMaxFreq() const
 {
-    return _unlockedRange ? 30000000L : BANDS[_band].freqMax;
+    return unlockedRange ? 30000000L : BANDS[band].freqMax;
 }
 
-void RadioEngine::setRitEnabled(bool en)
+void RadioEngine::setRitEnabled(bool enabled)
 {
-    _ritEnabled = en;
+    ritEnabled = enabled;
     updateLO();
     g_guiNeedsUpdate = true;
-    
 }
 
-void RadioEngine::setRitOffset(long offset)
+void RadioEngine::setRitOffset(long newOffset)
 {
-    _ritOffset = offset;
+    ritOffset = newOffset;
     if (!g_tx)
     {
         updateLO();
     }
     g_guiNeedsUpdate = true;
-    
+}
+
+void RadioEngine::setBfoUsb(double newBfo)
+{
+    bfoUsb = newBfo;
+    updateBFO();
+}
+
+void RadioEngine::setBfoLsb(double newBfo)
+{
+    bfoLsb = newBfo;
+    updateBFO();
+}
+
+void RadioEngine::setUsb(bool newUsb)
+{
+    usb = newUsb;
+    updateBFO();
+    updateLO();
+    g_guiNeedsUpdate = true;
+    settings.setUpdated();
 }
 
 void RadioEngine::setUtcOffset(int hours)
 {
-    _utcOffset = hours;
+    utcOffset = hours;
     settings.setUpdated();
-    
 }
 
 void RadioEngine::setDstActive(bool active)
 {
-    _dstActive = active;
+    dstActive = active;
     settings.setUpdated();
-    
 }
 
 void RadioEngine::loadFromPreferences()
 {
-  _bfoUsb = preferences.getDouble("bfo_usb", 9001500.0);
-  _bfoLsb = preferences.getDouble("bfo_lsb", 8998500.0);
-  _stepIdx = preferences.getInt("stepIdx", 1);
+  bfoUsb = preferences.getDouble("bfo_usb", 9001500.0);
+  bfoLsb = preferences.getDouble("bfo_lsb", 8998500.0);
+  stepIdx = preferences.getInt("stepIdx", 1);
 
-  if (preferences.getBytes("vfoA", &_vfoA, sizeof(VfoState)) == 0)
+  if (preferences.getBytes("vfoA", &vfoA, sizeof(VfoState)) == 0)
   {
-      _vfoA = { 7100000, 3, false };
+      vfoA = { 7100000, 3, false };
   }
-  if (preferences.getBytes("vfoB", &_vfoB, sizeof(VfoState)) == 0)
+  if (preferences.getBytes("vfoB", &vfoB, sizeof(VfoState)) == 0)
   {
-      _vfoB = { 14200000, 2, true };
+      vfoB = { 14200000, 2, true };
   }
-  if (preferences.getBytes("mems", _memChannels, sizeof(_memChannels)) == 0)
+  if (preferences.getBytes("mems", memChannels, sizeof(memChannels)) == 0)
   {
     for(int i = 0; i < NUM_MEM_CHANNELS; i++)
     {
-        _memChannels[i] = { 0L, 0, false, false }; // occupied=false = empty slot
+        memChannels[i] = { 0L, 0, false, false }; // occupied=false = empty slot
     }
   }
 
-  _activeVfo = preferences.getInt("vfoActive", 0);
-  _utcOffset = preferences.getInt("utc_off", 1);
-  _dstActive = preferences.getBool("dst_act", true);
-  VfoState& act = (_activeVfo == 0) ? _vfoA : _vfoB;
-  _freq = act.freq;
-  _band = act.band;
-  _usb = act.usb;
+  activeVfo = preferences.getInt("vfoActive", 0);
+  utcOffset = preferences.getInt("utc_off", 1);
+  dstActive = preferences.getBool("dst_act", true);
+  VfoState& act = (activeVfo == 0) ? vfoA : vfoB;
+  freq = act.freq;
+  band = act.band;
+  usb = act.usb;
 
   for (int i = 0; i < NUM_BANDS; i++)
   {
     char k[8];
     snprintf(k, 8, "f%d", i);
-    _bandFreqs[i] = preferences.getLong(k, BANDS[i].freqDefault);
+    bandFreqs[i] = preferences.getLong(k, BANDS[i].freqDefault);
   }
 }
 
 void RadioEngine::saveToPreferences()
 {
   // Smart-Save: Only write if changed to save Flash cycles
-  if (preferences.getDouble("bfo_usb", 0) != _bfoUsb)
+  if (preferences.getDouble("bfo_usb", 0) != bfoUsb)
   {
-      preferences.putDouble("bfo_usb", _bfoUsb);
+      preferences.putDouble("bfo_usb", bfoUsb);
   }
-  if (preferences.getDouble("bfo_lsb", 0) != _bfoLsb)
+  if (preferences.getDouble("bfo_lsb", 0) != bfoLsb)
   {
-      preferences.putDouble("bfo_lsb", _bfoLsb);
+      preferences.putDouble("bfo_lsb", bfoLsb);
   }
-  if (preferences.getInt("stepIdx", -1) != _stepIdx)
+  if (preferences.getInt("stepIdx", -1) != stepIdx)
   {
-      preferences.putInt("stepIdx", _stepIdx);
+      preferences.putInt("stepIdx", stepIdx);
   }
 
   saveActiveToVfo();
 
   // Smart-Save for structs: compare before writing
   VfoState tmp;
-  if (preferences.getBytes("vfoA", &tmp, sizeof(VfoState)) != sizeof(VfoState) || memcmp(&tmp, &_vfoA, sizeof(VfoState)) != 0)
+  if (preferences.getBytes("vfoA", &tmp, sizeof(VfoState)) != sizeof(VfoState) || memcmp(&tmp, &vfoA, sizeof(VfoState)) != 0)
   {
-    preferences.putBytes("vfoA", &_vfoA, sizeof(VfoState));
+    preferences.putBytes("vfoA", &vfoA, sizeof(VfoState));
   }
-  if (preferences.getBytes("vfoB", &tmp, sizeof(VfoState)) != sizeof(VfoState) || memcmp(&tmp, &_vfoB, sizeof(VfoState)) != 0)
+  if (preferences.getBytes("vfoB", &tmp, sizeof(VfoState)) != sizeof(VfoState) || memcmp(&tmp, &vfoB, sizeof(VfoState)) != 0)
   {
-    preferences.putBytes("vfoB", &_vfoB, sizeof(VfoState));
+    preferences.putBytes("vfoB", &vfoB, sizeof(VfoState));
   }
 
   VfoState tmpMems[NUM_MEM_CHANNELS];
-  if (preferences.getBytes("mems", tmpMems, sizeof(tmpMems)) != sizeof(tmpMems) || memcmp(tmpMems, _memChannels, sizeof(tmpMems)) != 0)
+  if (preferences.getBytes("mems", tmpMems, sizeof(tmpMems)) != sizeof(tmpMems) || memcmp(tmpMems, memChannels, sizeof(tmpMems)) != 0)
   {
-    preferences.putBytes("mems", _memChannels, sizeof(_memChannels));
+    preferences.putBytes("mems", memChannels, sizeof(memChannels));
   }
 
-  if (preferences.getInt("vfoActive", -1) != _activeVfo)
+  if (preferences.getInt("vfoActive", -1) != activeVfo)
   {
-      preferences.putInt("vfoActive", _activeVfo);
+      preferences.putInt("vfoActive", activeVfo);
   }
 
-  if (preferences.getInt("utc_off", 99) != _utcOffset)
+  if (preferences.getInt("utc_off", 99) != utcOffset)
   {
-      preferences.putInt("utc_off", _utcOffset);
+      preferences.putInt("utc_off", utcOffset);
   }
-  if (preferences.getBool("dst_act", !_dstActive) != _dstActive)
+  if (preferences.getBool("dst_act", !dstActive) != dstActive)
   {
-      preferences.putBool("dst_act", _dstActive);
+      preferences.putBool("dst_act", dstActive);
   }
 
   for (int i = 0; i < NUM_BANDS; i++)
   {
     char key[8];
     snprintf(key, 8, "f%d", i);
-    if (preferences.getLong(key, 0) != _bandFreqs[i])
+    if (preferences.getLong(key, 0) != bandFreqs[i])
     {
-        preferences.putLong(key, _bandFreqs[i]);
+        preferences.putLong(key, bandFreqs[i]);
     }
   }
 }

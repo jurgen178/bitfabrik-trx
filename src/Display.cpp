@@ -34,9 +34,10 @@
 
 // ── SHARED DRAWING TOOLS (AppMode) ──────────────────────────────────────────
 
-void AppMode::_drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode)
+void AppMode::drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode)
 {
     canvas.fillSprite(TFT_BLACK);
+    // ...
 
     // 1. Mode Flag (Top Right)
     if (showMode) {
@@ -78,7 +79,7 @@ void AppMode::_drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool show
     canvas.drawString(" MHz", startX + mainW + subW, 37);
 }
 
-void AppMode::_drawFullPageHeader(const char* label, uint16_t color, bool showBackButton)
+void AppMode::drawFullPageHeader(const char* label, uint16_t color, bool showBackButton)
 {
     // Draw Static Frame
     tft.drawRect(5, 5, 470, 310, color);
@@ -108,7 +109,7 @@ void RitMode::render(bool force)
 {
     if (force) {
         tft.fillScreen(TFT_BLACK);
-        _drawFullPageHeader("RIT CONTROL", 0x07FF);
+        drawFullPageHeader("RIT CONTROL", 0x07FF);
         tft.setFont(nullptr);
         tft.setTextSize(2);
         tft.setTextColor(TFT_DARKGREY);
@@ -167,7 +168,7 @@ void RitMode::onRotate(int delta)
     radio.setRitOffset(radio.getRitOffset() + delta * 10);
 }
 
-void ParamMode::_drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color)
+void ParamMode::drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color)
 {
     canvas.fillSprite(TFT_BLACK);
     canvas.setFont(&fonts::FreeSans18pt7b);
@@ -202,14 +203,14 @@ void VolumeMode::render(bool force)
 {
     if (force) {
         tft.fillScreen(TFT_BLACK);
-        _drawFullPageHeader("AUDIO VOLUME", TRX_BLUE);
+        drawFullPageHeader("AUDIO VOLUME", TRX_BLUE);
         tft.setFont(nullptr);
         tft.setTextSize(2);
         tft.setTextColor(TFT_DARKGREY);
         tft.setTextDatum(middle_center);
         tft.drawString("Adjust output level", 240, 85);
     }
-    _drawBar(ui.getCanvas(), "AUDIO VOLUME", audio.getVolume(), TRX_BLUE);
+    drawBar(ui.getCanvas(), "AUDIO VOLUME", audio.getVolume(), TRX_BLUE);
 }
 void VolumeMode::onButtonShort() { ui.setMode(DisplayMode::Power); }
 void VolumeMode::onRotate(int delta) { audio.setVolume(audio.getVolume() + delta); ui.setMode(DisplayMode::Volume); }
@@ -218,14 +219,14 @@ void PowerMode::render(bool force)
 {
     if (force) {
         tft.fillScreen(TFT_BLACK);
-        _drawFullPageHeader("TRANSMIT POWER", TFT_RED);
+        drawFullPageHeader("TRANSMIT POWER", TFT_RED);
         tft.setFont(nullptr);
         tft.setTextSize(2);
         tft.setTextColor(TFT_DARKGREY);
         tft.setTextDatum(middle_center);
         tft.drawString("Adjust PA drive level", 240, 85);
     }
-    _drawBar(ui.getCanvas(), "TRANSMIT POWER", audio.getPaPower(), TFT_RED);
+    drawBar(ui.getCanvas(), "TRANSMIT POWER", audio.getPaPower(), TFT_RED);
 }
 void PowerMode::onButtonShort() { ui.setMode(DisplayMode::Radio); }
 void PowerMode::onRotate(int delta) { audio.setPaPower(audio.getPaPower() + delta); ui.setMode(DisplayMode::Power); }
@@ -234,14 +235,14 @@ void MicMode::render(bool force)
 {
     if (force) {
         tft.fillScreen(TFT_BLACK);
-        _drawFullPageHeader("MIC GAIN", TRX_AMBER);
+        drawFullPageHeader("MIC GAIN", TRX_AMBER);
         tft.setFont(nullptr);
         tft.setTextSize(2);
         tft.setTextColor(TFT_DARKGREY);
         tft.setTextDatum(middle_center);
         tft.drawString("Adjust microphone sensitivity", 240, 85);
     }
-    _drawBar(ui.getCanvas(), "MIC GAIN", audio.getMicGain(), TRX_AMBER);
+    drawBar(ui.getCanvas(), "MIC GAIN", audio.getMicGain(), TRX_AMBER);
 }
 void MicMode::onButtonShort() { ui.setMode(DisplayMode::Radio); }
 void MicMode::onRotate(int delta) { audio.setMicGain(audio.getMicGain() + delta); ui.setMode(DisplayMode::Mic); }
@@ -287,65 +288,65 @@ void Button::draw() const
  */
 class RadioMode : public AppMode
 {
-    Button _bandBtns[NUM_BANDS];
-    Button _ctrlBtns[7]; // VFO A, VFO B, A=B, RIT, MIC, GEN, SET
-    Button _memBtns[NUM_MEM_CHANNELS];
-    uint32_t _lastMemRevision = 0xFFFFFFFF; // Force initial draw
-    int    _lastBand = -1;
+    Button bandBtns[NUM_BANDS];
+    Button ctrlBtns[7]; // VFO A, VFO B, A=B, RIT, MIC, GEN, SET
+    Button memBtns[NUM_MEM_CHANNELS];
+    uint32_t lastMemRevision = 0xFFFFFFFF; // Force initial draw
+    int    lastBand = -1;
 
-    void _initButtons()
+    void initButtons()
     {
         // Band buttons: 3x2 grid
         for (int i = 0; i < NUM_BANDS; i++) {
-            _bandBtns[i].x    = 10 + (i % 3) * 155;
-            _bandBtns[i].y    = 90 + (i / 3) * 55;
-            _bandBtns[i].w    = 145;
-            _bandBtns[i].h    = 45;
-            _bandBtns[i].label        = BANDS[i].enabled ? BANDS[i].name : "---";
-            _bandBtns[i].disabled     = !BANDS[i].enabled;
-            _bandBtns[i].labelFont    = &fonts::FreeMono18pt7b; // Large bold font for bands
-            _bandBtns[i].colorInactive = 0x3186;
-            _bandBtns[i].onTap        = [i]() { radio.selectBand(i); notifyWebUpdate(); };
+            bandBtns[i].x    = 10 + (i % 3) * 155;
+            bandBtns[i].y    = 90 + (i / 3) * 55;
+            bandBtns[i].w    = 145;
+            bandBtns[i].h    = 45;
+            bandBtns[i].label        = BANDS[i].enabled ? BANDS[i].name : "---";
+            bandBtns[i].disabled     = !BANDS[i].enabled;
+            bandBtns[i].labelFont    = &fonts::FreeMono18pt7b; // Large bold font for bands
+            bandBtns[i].colorInactive = 0x3186;
+            bandBtns[i].onTap        = [i]() { radio.selectBand(i); notifyWebUpdate(); };
         }
         // Control buttons: single row at y=210
         constexpr int BW = 60, GAP = 10, BY = 210;
         const char* ctrlLabels[] = { "VFO A", "VFO B", "A=B", "RIT", "MIC", "GEN", "SET" };
         for (int i = 0; i < 7; i++) {
-            _ctrlBtns[i].x     = i * (BW + GAP);
-            _ctrlBtns[i].y     = BY;
-            _ctrlBtns[i].w     = BW;
-            _ctrlBtns[i].h     = 40;
-            _ctrlBtns[i].label = ctrlLabels[i];
+            ctrlBtns[i].x     = i * (BW + GAP);
+            ctrlBtns[i].y     = BY;
+            ctrlBtns[i].w     = BW;
+            ctrlBtns[i].h     = 40;
+            ctrlBtns[i].label = ctrlLabels[i];
         }
-        _ctrlBtns[0].onTap = []() { radio.switchVfo(0); };
-        _ctrlBtns[1].onTap = []() { radio.switchVfo(1); };
-        _ctrlBtns[2].onTap = []() { radio.vfoCopy(); };
-        _ctrlBtns[3].onTap = []() {
+        ctrlBtns[0].onTap = []() { radio.switchVfo(0); };
+        ctrlBtns[1].onTap = []() { radio.switchVfo(1); };
+        ctrlBtns[2].onTap = []() { radio.vfoCopy(); };
+        ctrlBtns[3].onTap = []() {
             bool s = !radio.isRitEnabled();
             radio.setRitEnabled(s);
             if (s) ui.setMode(DisplayMode::Rit);
             else ui.setMode(DisplayMode::Radio);
         };
-        _ctrlBtns[4].onTap = []() { ui.setMode(DisplayMode::Mic); };
-        _ctrlBtns[5].onTap = []() { ui.setMode(DisplayMode::Generator); };
-        _ctrlBtns[6].onTap = []() { ui.setMode(DisplayMode::Settings); };
+        ctrlBtns[4].onTap = []() { ui.setMode(DisplayMode::Mic); };
+        ctrlBtns[5].onTap = []() { ui.setMode(DisplayMode::Generator); };
+        ctrlBtns[6].onTap = []() { ui.setMode(DisplayMode::Settings); };
 
         // Memory buttons: 10 slots in one row beneath control buttons
         // Layout: x=11+i*46, y=272, w=44, h=32; gap=2px
         for (int i = 0; i < NUM_MEM_CHANNELS; i++)
         {
-            _memBtns[i].x            = 11 + i * 46;
-            _memBtns[i].y            = 272;
-            _memBtns[i].w            = 44;
-            _memBtns[i].h            = 32;
-            _memBtns[i].disabled     = false; // memRecall() handles empty slots internally
-            _memBtns[i].colorInactive = 0x18C3;
-            _memBtns[i].colorActive   = TRX_AMBER_LOW;
+            memBtns[i].x            = 11 + i * 46;
+            memBtns[i].y            = 272;
+            memBtns[i].w            = 44;
+            memBtns[i].h            = 32;
+            memBtns[i].disabled     = false; // memRecall() handles empty slots internally
+            memBtns[i].colorInactive = 0x18C3;
+            memBtns[i].colorActive   = TRX_AMBER_LOW;
         }
     }
 
     // Update mem button labels/subtitles/state and redraw all 10 buttons.
-    void _refreshMemButtons()
+    void refreshMemButtons()
     {
         static const char* MEM_LABELS[] = {
             "M1","M2","M3","M4","M5","M6","M7","M8","M9","M10"
@@ -354,23 +355,23 @@ class RadioMode : public AppMode
         for (int i = 0; i < NUM_MEM_CHANNELS; i++)
         {
             bool occ = slots[i].occupied;
-            _memBtns[i].label    = MEM_LABELS[i];
+            memBtns[i].label    = MEM_LABELS[i];
 
             if (occ)
             {
-                _memBtns[i].setFreqSubtitle(slots[i].freq);
-                _memBtns[i].colorInactive = TRX_AMBER_LOW; // Belegt = Bernstein (aktiv leuchtend)
+                memBtns[i].setFreqSubtitle(slots[i].freq);
+                memBtns[i].colorInactive = TRX_AMBER_LOW; // Belegt = Bernstein (aktiv leuchtend)
             }
             else
             {
-                _memBtns[i].subtitleBuf[0] = '\0';
-                _memBtns[i].colorInactive = 0x4208; // Leer = Grau (neutraler Platzhalter)
+                memBtns[i].subtitleBuf[0] = '\0';
+                memBtns[i].colorInactive = 0x4208; // Leer = Grau (neutraler Platzhalter)
             }
-            _memBtns[i].draw();
+            memBtns[i].draw();
         }
     }
 
-    void _updateButtons(bool force)
+    void updateButtons(bool force)
     {
         UIState& last = ui.getLastState();
         int curBand   = radio.getBand();
@@ -387,47 +388,47 @@ class RadioMode : public AppMode
                            || curMode == EncoderMode::Mic;
 
         uint32_t curMemRev = radio.getMemRevision();
-        bool memChanged = force || (curMemRev != _lastMemRevision);
+        bool memChanged = force || (curMemRev != lastMemRevision);
 
         if (bandChanged) {
-            _lastBand = curBand;
+            lastBand = curBand;
             for (int i = 0; i < NUM_BANDS; i++)
-                _bandBtns[i].active = (i == curBand);
+                bandBtns[i].active = (i == curBand);
             if (force) {
-                for (auto& b : _bandBtns)
+                for (auto& b : bandBtns)
                     b.draw();
             } else {
                 if (last.band >= 0) {
-                    _bandBtns[last.band].active = false;
-                    _bandBtns[last.band].draw();
+                    bandBtns[last.band].active = false;
+                    bandBtns[last.band].draw();
                 }
-                _bandBtns[curBand].active = true;
-                _bandBtns[curBand].draw();
+                bandBtns[curBand].active = true;
+                bandBtns[curBand].draw();
             }
             last.band = curBand;
         }
         if (memChanged) {
-            _lastMemRevision = curMemRev;
-            _refreshMemButtons();
+            lastMemRevision = curMemRev;
+            refreshMemButtons();
         }
         if (vfoChanged) {
-            _ctrlBtns[0].active = (curVfo == 0);
-            _ctrlBtns[1].active = (curVfo == 1);
-            _ctrlBtns[0].draw();
-            _ctrlBtns[1].draw();
+            ctrlBtns[0].active = (curVfo == 0);
+            ctrlBtns[1].active = (curVfo == 1);
+            ctrlBtns[0].draw();
+            ctrlBtns[1].draw();
             last.vfo = curVfo;
         }
         if (ritChanged) {
-            _ctrlBtns[3].active = curRit;
-            _ctrlBtns[3].draw();
+            ctrlBtns[3].active = curRit;
+            ctrlBtns[3].draw();
             last.ritEnabled = curRit;
         }
         if (modeChanged) {
-            _ctrlBtns[2].draw();
-            _ctrlBtns[4].active = (curMode == EncoderMode::Mic);
-            _ctrlBtns[4].draw();
-            _ctrlBtns[5].draw();
-            _ctrlBtns[6].draw();
+            ctrlBtns[2].draw();
+            ctrlBtns[4].active = (curMode == EncoderMode::Mic);
+            ctrlBtns[4].draw();
+            ctrlBtns[5].draw();
+            ctrlBtns[6].draw();
             last.mode = curMode;
         }
     }
@@ -439,14 +440,14 @@ public:
     {
         // PA state is managed by the Hardware Sequencer (setTxRx)
         g_tx = false;
-        _initButtons();
+        initButtons();
     }
 
     void render(bool force) override
     {
-        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb());
+        drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb());
         ui.getCanvas().pushSprite(8, 8);
-        _updateButtons(force);
+        updateButtons(force);
     }
 
     void onButtonShort() override { ui.setMode(DisplayMode::Volume); }
@@ -463,7 +464,7 @@ public:
     {
         for (int i = 0; i < NUM_MEM_CHANNELS; i++)
         {
-            if (_memBtns[i].hit(tx, ty))
+            if (memBtns[i].hit(tx, ty))
             {
                 if (longPress)
                 {
@@ -487,7 +488,7 @@ public:
                 return;
             }
         }
-        for (auto& b : _bandBtns)
+        for (auto& b : bandBtns)
         {
             if (b.hit(tx, ty))
             {
@@ -496,7 +497,7 @@ public:
                 return;
             }
         }
-        for (auto& b : _ctrlBtns)
+        for (auto& b : ctrlBtns)
         {
             if (b.hit(tx, ty))
             {
@@ -575,7 +576,7 @@ public:
     {
         if (force) {
             tft.fillScreen(TFT_BLACK);
-            _drawFullPageHeader(L_SIGNAL_GEN, TFT_RED, false);
+            drawFullPageHeader(L_SIGNAL_GEN, TFT_RED, false);
 
             // Warning text above the large button
             tft.setFont(nullptr);
@@ -593,7 +594,7 @@ public:
             tft.drawString(L_BACK, 240, 250);
         }
 
-        _drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb(), false);
+        drawFrequency(ui.getCanvas(), radio.getFrequency(), radio.isUsb(), false);
         ui.getCanvas().pushSprite(8, 100);
     }
 
@@ -615,9 +616,9 @@ public:
 class SettingsMode : public AppMode
 {
 private:
-    int _focusParam = 0; // Index relative to active tab
-    int _currentTab = 0; // 0=VOX, 1=TIME
-    int _rotaryAccum = 0; // "Gearbox" for sensitive parameters
+    int focusParam = 0; // Index relative to active tab
+    int currentTab = 0; // 0=VOX, 1=TIME
+    int rotaryAccum = 0; // "Gearbox" for sensitive parameters
 
     struct {
         bool voxEn = false;
@@ -627,7 +628,7 @@ private:
         bool dstActive = false;
         int  focus = -1;
         int  tab = -1;
-    } _localLast;
+    } localLast;
 
 public:
     const char* getName() override { return "SETTINGS"; }
@@ -635,23 +636,23 @@ public:
     void onEnter() override
     {
         tft.fillScreen(TFT_BLACK);
-        _focusParam = 0;
-        _rotaryAccum = 0;
-        _localLast.tab = -1; // Force redraw
-        _localLast.focus = -1;
+        focusParam = 0;
+        rotaryAccum = 0;
+        localLast.tab = -1; // Force redraw
+        localLast.focus = -1;
         encManager.setMode(EncoderMode::Tune); // Ensure we are not adjusting Vol/Power
     }
 
     void render(bool force) override
     {
         bool changed = force ||
-                      _localLast.tab != _currentTab ||
-                      _localLast.focus != _focusParam ||
-                      _localLast.voxEn != radio.isVoxEnabled() ||
-                      _localLast.voxThresh != radio.getVoxThreshold() ||
-                      _localLast.voxDelay != radio.getVoxDelay() ||
-                      _localLast.utcOffset != radio.getUtcOffset() ||
-                      _localLast.dstActive != radio.isDstActive();
+                      localLast.tab != currentTab ||
+                      localLast.focus != focusParam ||
+                      localLast.voxEn != radio.isVoxEnabled() ||
+                      localLast.voxThresh != radio.getVoxThreshold() ||
+                      localLast.voxDelay != radio.getVoxDelay() ||
+                      localLast.utcOffset != radio.getUtcOffset() ||
+                      localLast.dstActive != radio.isDstActive();
 
         if (!changed)
             return;
@@ -659,13 +660,13 @@ public:
         tft.setFont(nullptr);
 
         // Static frame and title
-        if (force || _localLast.tab != _currentTab)
+        if (force || localLast.tab != currentTab)
         {
             tft.drawRect(5, 5, 470, 310, TRX_AMBER_LOW);
 
             // Draw Tabs
-            _drawTabButton(0, L_TAB_VOX, _currentTab == 0);
-            _drawTabButton(1, L_TAB_TIME, _currentTab == 1);
+            drawTabButton(0, L_TAB_VOX, currentTab == 0);
+            drawTabButton(1, L_TAB_TIME, currentTab == 1);
 
             tft.drawLine(10, 60, 470, 60, 0x4208); // Neutral divider line
 
@@ -681,45 +682,45 @@ public:
             tft.fillRect(10, 65, 460, 190, TFT_BLACK);
         }
 
-        if (_currentTab == 0) // VOX TAB
+        if (currentTab == 0) // VOX TAB
         {
-            _drawCheckboxRow(0, L_VOX_ACTIVE, radio.isVoxEnabled(), _focusParam == 0);
-            _drawParamRow(1, L_VOX_THRESH, String(radio.getVoxThreshold()), _focusParam == 1, !radio.isVoxEnabled());
-            _drawParamRow(2, L_VOX_DELAY, String(radio.getVoxDelay()) + " ms", _focusParam == 2, !radio.isVoxEnabled());
+            drawCheckboxRow(0, L_VOX_ACTIVE, radio.isVoxEnabled(), focusParam == 0);
+            drawParamRow(1, L_VOX_THRESH, String(radio.getVoxThreshold()), focusParam == 1, !radio.isVoxEnabled());
+            drawParamRow(2, L_VOX_DELAY, String(radio.getVoxDelay()) + " ms", focusParam == 2, !radio.isVoxEnabled());
         }
-        else if (_currentTab == 1) // TIME TAB
+        else if (currentTab == 1) // TIME TAB
         {
-            _drawParamRow(0, L_UTC_OFFSET, (radio.getUtcOffset() >= 0 ? "+" : "") + String(radio.getUtcOffset()), _focusParam == 0);
-            _drawCheckboxRow(1, L_DST, radio.isDstActive(), _focusParam == 1);
+            drawParamRow(0, L_UTC_OFFSET, (radio.getUtcOffset() >= 0 ? "+" : "") + String(radio.getUtcOffset()), focusParam == 0);
+            drawCheckboxRow(1, L_DST, radio.isDstActive(), focusParam == 1);
         }
 
         // Update cache
-        _localLast.voxEn = radio.isVoxEnabled();
-        _localLast.voxThresh = radio.getVoxThreshold();
-        _localLast.voxDelay = radio.getVoxDelay();
-        _localLast.utcOffset = radio.getUtcOffset();
-        _localLast.dstActive = radio.isDstActive();
-        _localLast.focus = _focusParam;
-        _localLast.tab = _currentTab;
+        localLast.voxEn = radio.isVoxEnabled();
+        localLast.voxThresh = radio.getVoxThreshold();
+        localLast.voxDelay = radio.getVoxDelay();
+        localLast.utcOffset = radio.getUtcOffset();
+        localLast.dstActive = radio.isDstActive();
+        localLast.focus = focusParam;
+        localLast.tab = currentTab;
     }
 
     void onRotate(int delta) override
     {
-        if (_currentTab == 0) // VOX
+        if (currentTab == 0) // VOX
         {
             if (!radio.isVoxEnabled()) return;
-            if (_focusParam == 1) radio.setVoxThreshold(radio.getVoxThreshold() + delta * 10);
-            else if (_focusParam == 2) radio.setVoxDelay(radio.getVoxDelay() + delta * 50);
+            if (focusParam == 1) radio.setVoxThreshold(radio.getVoxThreshold() + delta * 10);
+            else if (focusParam == 2) radio.setVoxDelay(radio.getVoxDelay() + delta * 50);
         }
-        else if (_currentTab == 1) // TIME
+        else if (currentTab == 1) // TIME
         {
-            if (_focusParam == 0) {
-                _rotaryAccum += delta;
+            if (focusParam == 0) {
+                rotaryAccum += delta;
                 // Gear ratio: 4 ticks required for 1 hour change
-                if (abs(_rotaryAccum) >= 4) {
-                    int change = _rotaryAccum / 4;
+                if (abs(rotaryAccum) >= 4) {
+                    int change = rotaryAccum / 4;
                     radio.setUtcOffset(constrain(radio.getUtcOffset() + change, -12, 14));
-                    _rotaryAccum %= 4;
+                    rotaryAccum %= 4;
                 }
             }
         }
@@ -734,8 +735,8 @@ public:
         // Tab Switch (Check actual button boundaries)
         if (ty >= 10 && ty <= 45)
         {
-            if (tx >= 10 && tx <= 105 && _currentTab != 0) { _currentTab = 0; _focusParam = 0; _rotaryAccum = 0; }
-            else if (tx >= 110 && tx <= 205 && _currentTab != 1) { _currentTab = 1; _focusParam = 0; _rotaryAccum = 0; }
+            if (tx >= 10 && tx <= 105 && currentTab != 0) { currentTab = 0; focusParam = 0; rotaryAccum = 0; }
+            else if (tx >= 110 && tx <= 205 && currentTab != 1) { currentTab = 1; focusParam = 0; rotaryAccum = 0; }
             g_guiNeedsUpdate = true;
             return;
         }
@@ -744,15 +745,15 @@ public:
         int row = (ty - 80) / 50;
         if (row >= 0 && row < 3 && ty >= 80)
         {
-            if (_currentTab == 0) // VOX
+            if (currentTab == 0) // VOX
             {
-                if (row == 0) { radio.setVoxEnabled(!radio.isVoxEnabled()); _focusParam = 0; }
-                else if (radio.isVoxEnabled()) _focusParam = row;
+                if (row == 0) { radio.setVoxEnabled(!radio.isVoxEnabled()); focusParam = 0; }
+                else if (radio.isVoxEnabled()) focusParam = row;
             }
-            else if (_currentTab == 1) // TIME
+            else if (currentTab == 1) // TIME
             {
-                if (row == 0) { _focusParam = 0; _rotaryAccum = 0; }
-                else if (row == 1) { radio.setDstActive(!radio.isDstActive()); _focusParam = 1; }
+                if (row == 0) { focusParam = 0; rotaryAccum = 0; }
+                else if (row == 1) { radio.setDstActive(!radio.isDstActive()); focusParam = 1; }
             }
         }
 
@@ -761,13 +762,13 @@ public:
 
     void onButtonShort() override
     {
-        if (_currentTab == 0 && _focusParam == 0) radio.setVoxEnabled(!radio.isVoxEnabled());
-        else if (_currentTab == 1 && _focusParam == 1) radio.setDstActive(!radio.isDstActive());
+        if (currentTab == 0 && focusParam == 0) radio.setVoxEnabled(!radio.isVoxEnabled());
+        else if (currentTab == 1 && focusParam == 1) radio.setDstActive(!radio.isDstActive());
         g_guiNeedsUpdate = true;
     }
 
 private:
-    void _drawTabButton(int idx, const char* label, bool active)
+    void drawTabButton(int idx, const char* label, bool active)
     {
         int x = 10 + idx * 100;
         uint16_t color = active ? TRX_BLUE : 0x2104; // Blue for active tab
@@ -781,7 +782,7 @@ private:
         tft.drawString(label, x + 47, 27);
     }
 
-    void _drawCheckboxRow(int row, String label, bool checked, bool focused)
+    void drawCheckboxRow(int row, String label, bool checked, bool focused)
     {
         int y = 85 + row * 50;
         uint16_t color = focused ? TRX_AMBER : TFT_DARKGREY;
@@ -809,7 +810,7 @@ private:
         tft.drawRect(215, y - 8, 160, 35, borderColor);
     }
 
-    void _drawParamRow(int row, String label, String val, bool focused, bool disabled = false)
+    void drawParamRow(int row, String label, String val, bool focused, bool disabled = false)
     {
         int y = 85 + row * 50;
         uint16_t color = disabled ? 0x2104 : (focused ? TRX_AMBER : TFT_DARKGREY);
@@ -836,26 +837,26 @@ private:
  */
 DisplayController ui;
 
-DisplayController::DisplayController() : _topCanvas(&tft)
+DisplayController::DisplayController() : topCanvas(&tft)
 {
-    _radioMode = new RadioMode();
-    _genMode   = new GeneratorMode();
-    _settingsMode = new SettingsMode();
-    _ritMode   = new RitMode();
-    _volMode   = new VolumeMode();
-    _pwrMode   = new PowerMode();
-    _micMode   = new MicMode();
-    _currentMode = _radioMode;
+    radioMode = new RadioMode();
+    genMode   = new GeneratorMode();
+    settingsMode = new SettingsMode();
+    ritMode   = new RitMode();
+    volMode   = new VolumeMode();
+    pwrMode   = new PowerMode();
+    micMode   = new MicMode();
+    currentMode = radioMode;
 }
 
 void DisplayController::begin()
 {
-    if (_initialized)
+    if (initialized)
         return;
-    _topCanvas.createSprite(464, 70);
-    _topCanvas.setColorDepth(16);
-    _initialized = true;
-    _currentMode->onEnter();
+    topCanvas.createSprite(464, 70);
+    topCanvas.setColorDepth(16);
+    initialized = true;
+    currentMode->onEnter();
 }
 
 void DisplayController::setMode(DisplayMode mode)
@@ -865,29 +866,29 @@ void DisplayController::setMode(DisplayMode mode)
         AppMode* nextMode = nullptr;
         switch(mode)
         {
-            case DisplayMode::Generator: nextMode = _genMode; break;
-            case DisplayMode::Settings:  nextMode = _settingsMode; break;
-            case DisplayMode::Rit:       nextMode = _ritMode; break;
-            case DisplayMode::Volume:    nextMode = _volMode; break;
-            case DisplayMode::Power:     nextMode = _pwrMode; break;
-            case DisplayMode::Mic:       nextMode = _micMode; break;
-            default:                     nextMode = _radioMode; break;
+            case DisplayMode::Generator: nextMode = genMode; break;
+            case DisplayMode::Settings:  nextMode = settingsMode; break;
+            case DisplayMode::Rit:       nextMode = ritMode; break;
+            case DisplayMode::Volume:    nextMode = volMode; break;
+            case DisplayMode::Power:     nextMode = pwrMode; break;
+            case DisplayMode::Mic:       nextMode = micMode; break;
+            default:                     nextMode = radioMode; break;
         }
 
-        if (nextMode == _currentMode) {
+        if (nextMode == currentMode) {
             // Refresh timeout if already in a param mode
             if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
-                _modeTimeout = millis();
+                modeTimeout = millis();
             xSemaphoreGiveRecursive(g_hwMutex);
             return;
         }
 
-        if (_currentMode)
-            _currentMode->onLeave();
+        if (currentMode)
+            currentMode->onLeave();
 
-        _previousMode = _currentMode;
-        _currentMode = nextMode;
-        _currentMode->onEnter();
+        previousMode = currentMode;
+        currentMode = nextMode;
+        currentMode->onEnter();
 
         // Synchronize Encoder Manager
         if (mode == DisplayMode::Volume) encManager.setMode(EncoderMode::Volume);
@@ -897,9 +898,9 @@ void DisplayController::setMode(DisplayMode mode)
         else if (mode == DisplayMode::Radio) encManager.setMode(EncoderMode::Tune);
 
         if (mode == DisplayMode::Volume || mode == DisplayMode::Power || mode == DisplayMode::Mic)
-            _modeTimeout = millis();
+            modeTimeout = millis();
         else
-            _modeTimeout = 0;
+            modeTimeout = 0;
 
         notifyWebUpdate();
         drawFullUI();
@@ -912,11 +913,11 @@ void DisplayController::drawFullUI()
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
         tft.fillScreen(TFT_BLACK);
-        if (_currentMode == _radioMode)
+        if (currentMode == radioMode)
         {
             tft.drawRect(5, 5, 470, 75, TRX_AMBER_LOW);
         }
-        _currentMode->render(true);
+        currentMode->render(true);
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
@@ -926,14 +927,14 @@ void DisplayController::update(bool force)
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
         checkTimeout();
-        _currentMode->render(force);
+        currentMode->render(force);
         xSemaphoreGiveRecursive(g_hwMutex);
     }
 }
 
 void DisplayController::checkTimeout()
 {
-    if (_modeTimeout > 0 && millis() - _modeTimeout > 3000)
+    if (modeTimeout > 0 && millis() - modeTimeout > 3000)
     {
         setMode(DisplayMode::Radio);
     }

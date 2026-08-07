@@ -12,8 +12,8 @@
 class SettingsManager
 {
 private:
-    unsigned long _lastActivity = 0;
-    bool _isUpdated = false;
+    unsigned long lastActivity = 0;
+    bool isUpdated = false;
 
 public:
     SettingsManager();

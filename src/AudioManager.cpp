@@ -2,6 +2,7 @@
 #include "Hardware.h"
 #include "Display.h"
 #include "NetworkManager.h"
+#include "SettingsManager.h"
 #include <SPI.h>
 
 AudioManager audio;
@@ -23,9 +24,9 @@ void AudioManager::begin()
         ledcAttachPin(ZF_AGC_PWM, ZF_AGC_PWM_CHAN);
     #endif
 
-    setVolume(_volume);
-    setPaPower(_paPower);
-    setMicGain(_micGain);
+    setVolume(volume);
+    setPaPower(paPower);
+    setMicGain(micGain);
 }
 
 /**
@@ -33,19 +34,19 @@ void AudioManager::begin()
  * 1. AUDIO_VOLUME_PWM (NF Stage / Speaker)
  * 2. ZF_AGC_PWM (ZF Stage / Pre-amplification)
  */
-void AudioManager::setVolume(int vol)
+void AudioManager::setVolume(int newVolume)
 {
-    _volume = constrain(vol, 0, 100);
+    volume = constrain(newVolume, 0, 100);
 
     // Calculate NF Volume (Pin 13)
-    int nfPwm = AUDIO_VOL_PWM_MIN + (int)((float)_volume * (AUDIO_VOL_PWM_MAX - AUDIO_VOL_PWM_MIN) / 100.0f);
+    int nfPwm = AUDIO_VOL_PWM_MIN + static_cast<int>(static_cast<float>(volume) * (AUDIO_VOL_PWM_MAX - AUDIO_VOL_PWM_MIN) / 100.0f);
 
     // Calculate ZF Gain (Pin 14)
     // Mapping 0-100% to ZF_AGC_MIN-255
     int zfPwm = 0;
-    if (_volume > 0)
+    if (volume > 0)
     {
-        zfPwm = map(_volume, 1, 100, ZF_AGC_MIN, 255);
+        zfPwm = map(volume, 1, 100, ZF_AGC_MIN, 255);
     }
 
     #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
@@ -57,6 +58,7 @@ void AudioManager::setVolume(int vol)
     #endif
 
     g_guiNeedsUpdate = true;
+    settings.setUpdated();
 }
 
 /**
@@ -66,8 +68,9 @@ void AudioManager::setVolume(int vol)
  */
 void AudioManager::setPaPower(int level)
 {
-    _paPower = constrain(level, 0, 100);
+    paPower = constrain(level, 0, 100);
     g_guiNeedsUpdate = true;
+    settings.setUpdated();
 }
 
 /**
@@ -75,11 +78,11 @@ void AudioManager::setPaPower(int level)
  */
 void AudioManager::setMicGain(int gain)
 {
-    _micGain = constrain(gain, 0, 100);
+    micGain = constrain(gain, 0, 100);
 
     // MCP41010: 16-bit command [00010001] [Data 0-255]
     // 0x11 = Write to Potentiometer 0
-    uint8_t rawVal = (uint8_t)((float)_micGain * 2.55f);
+    uint8_t rawVal = static_cast<uint8_t>(static_cast<float>(micGain) * 2.55f);
 
     if (xSemaphoreTakeRecursive(g_hwMutex, portMAX_DELAY))
     {
@@ -90,4 +93,5 @@ void AudioManager::setMicGain(int gain)
         xSemaphoreGiveRecursive(g_hwMutex);
     }
     g_guiNeedsUpdate = true;
+    settings.setUpdated();
 }

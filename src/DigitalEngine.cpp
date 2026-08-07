@@ -130,7 +130,7 @@ void sendRttyChar(char c)
       return;
   }
 
-  if (targetIsFigs != digital.isRttyFigs() && c != ' ')
+  if (targetIsFigs != digital.getRttyFigs() && c != ' ')
   {
     sendRttyByte(targetIsFigs ? 27 : 31); // ITA2 FIGS or LTRS shift
     digital.setRttyFigs(targetIsFigs);
@@ -177,6 +177,7 @@ void TaskDigital(void *p)
 
       digital.setBusy(false);
       digital.setKeyed(false);
+      digital.setActionType(""); // Reset action type after transmission
       notifyWebUpdate();
     }
     vTaskDelay(pdMS_TO_TICKS(50));

@@ -52,7 +52,6 @@ void TuneHandler::onRotate(int delta)
 #endif
 
     radio.setFrequency(radio.getFrequency() + delta * STEPS[radio.getStepIdx()] * mult);
-    settings.setUpdated();
 }
 
 /**
@@ -205,59 +204,59 @@ void EncoderManager::begin()
     setMode(EncoderMode::Tune);
 }
 
-void EncoderManager::setMode(EncoderMode mode)
+void EncoderManager::setMode(EncoderMode newMode)
 {
-    if (mode == _mode && _currentHandler) return;
+    if (newMode == mode && currentHandler) return;
 
-    if (_currentHandler)
+    if (currentHandler)
     {
-        _currentHandler->onLeave();
+        currentHandler->onLeave();
     }
 
-    _mode = mode;
-    switch(mode)
+    mode = newMode;
+    switch(newMode)
     {
         case EncoderMode::Volume:
-            _currentHandler = &_vol;
+            currentHandler = &vol;
             ui.setMode(DisplayMode::Volume);
             break;
         case EncoderMode::Power:
-            _currentHandler = &_power;
+            currentHandler = &power;
             ui.setMode(DisplayMode::Power);
             break;
         case EncoderMode::Mic:
-            _currentHandler = &_mic;
+            currentHandler = &mic;
             ui.setMode(DisplayMode::Mic);
             break;
         case EncoderMode::Calibrate:
-            _currentHandler = &_cal;
+            currentHandler = &cal;
             break;
         case EncoderMode::Rit:
-            _currentHandler = &_rit;
+            currentHandler = &rit;
             ui.setMode(DisplayMode::Rit);
             break;
         default:
-            _currentHandler = &_tune;
+            currentHandler = &tune;
             ui.setMode(DisplayMode::Radio);
             break;
     }
 
-    _currentHandler->onEnter();
-    _lastActivity = millis();
+    currentHandler->onEnter();
+    lastActivity = millis();
     g_guiNeedsUpdate = true;
 }
 
 void EncoderManager::cycleMode()
 {
-    if (_mode == EncoderMode::Tune)
+    if (mode == EncoderMode::Tune)
     {
         setMode(EncoderMode::Volume);
     }
-    else if (_mode == EncoderMode::Volume)
+    else if (mode == EncoderMode::Volume)
     {
         setMode(EncoderMode::Power);
     }
-    else if (_mode == EncoderMode::Rit)
+    else if (mode == EncoderMode::Rit)
     {
         setMode(EncoderMode::Tune);
     }
@@ -269,19 +268,19 @@ void EncoderManager::cycleMode()
 
 void EncoderManager::handleRotation(int delta)
 {
-    if (!_currentHandler)
+    if (!currentHandler)
     {
         setMode(EncoderMode::Tune);
     }
-    _currentHandler->onRotate(delta);
-    _lastActivity = millis();
+    currentHandler->onRotate(delta);
+    lastActivity = millis();
 }
 
 void EncoderManager::checkTimeout()
 {
-    if (_mode != EncoderMode::Tune && _mode != EncoderMode::Calibrate)
+    if (mode != EncoderMode::Tune && mode != EncoderMode::Calibrate)
     {
-        if (millis() - _lastActivity > 5000)
+        if (millis() - lastActivity > 5000)
         {
             setMode(EncoderMode::Tune);
         }

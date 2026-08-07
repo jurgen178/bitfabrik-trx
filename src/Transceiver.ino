@@ -13,6 +13,7 @@
 #include "RadioEngine.h"
 #include "AudioManager.h"
 #include "SettingsManager.h"
+#include "LogManager.h"
 
 // ── GLOBAL STATE ALLOCATION ───────────────────────────────────────────────
 
@@ -183,6 +184,7 @@ void setup()
 
   Serial.println("Settings: Loading...");
   settings.begin();
+  logger.begin();
 
   Serial.println("Audio: Starting PWM...");
   audio.begin();

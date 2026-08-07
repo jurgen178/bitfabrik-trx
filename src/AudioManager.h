@@ -12,31 +12,22 @@
 class AudioManager
 {
 private:
-    volatile int _volume = 50;   // Audio Gain 0-100% (Controls BOTH ZF and NF)
-    volatile int _paPower = 100; // Sendeleistung 0-100%
-    volatile int _micGain = 50;  // Microphone Gain 0-100%
+    volatile int volume = 50;   // Audio Gain 0-100% (Controls BOTH ZF and NF)
+    volatile int paPower = 100; // Sendeleistung 0-100%
+    volatile int micGain = 50;  // Microphone Gain 0-100%
 
 public:
     AudioManager();
 
     // ── Getters ──
-    int getVolume() const
-    {
-        return _volume;
-    }
-    int getPaPower() const
-    {
-        return _paPower;
-    }
-    int getMicGain() const
-    {
-        return _micGain;
-    }
+    int getVolume() const { return volume; }
+    int getPaPower() const { return paPower; }
+    int getMicGain() const { return micGain; }
 
     // ── Setters & Logic ──
-    void setVolume(int vol);
-    void setPaPower(int level);
-    void setMicGain(int gain);
+    void setVolume(int newVolume);
+    void setPaPower(int newLevel);
+    void setMicGain(int newGain);
 
     // Initialization (PWM Pins)
     void begin();

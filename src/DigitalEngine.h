@@ -34,31 +34,35 @@ struct MorseQueue {
 // ── DIGITAL ENGINE ─────────────────────────────────────────────────────────
 // Owns all digital-mode state. TaskDigital drives the transmit loop on Core 0.
 class DigitalEngine {
-    int           _mode = 0;        // 0 = Morse (CW), 1 = RTTY
-    volatile bool _isBusy    = false; // True while a message is being sent
-    volatile bool _isKeyed   = false; // Real-time CW keying signal read by TaskRadio
-    bool          _isRttyFigs = false;
-    char          _rxText[128] = {};
-    uint8_t       _rxLen = 0;
+    int           mode = 0;        // 0 = Morse (CW), 1 = RTTY
+    volatile bool busy    = false; // True while a message is being sent
+    volatile bool keyed   = false; // Real-time CW keying signal read by TaskRadio
+    bool          isRttyFigs = false;
+    char          rxText[128] = {};
+    uint8_t       rxLen = 0;
+    String        lastActionType = ""; // e.g. "EMAIL"
 
 public:
     MorseQueue queue; // Shared buffer between API writers and TaskDigital reader
 
-    int  getMode() const          { return _mode; }
-    void setMode(int m)           { _mode = m; }
-    bool isBusy() const           { return _isBusy; }
-    void setBusy(bool b)          { _isBusy = b; }
-    bool isKeyed() const          { return _isKeyed; }
-    void setKeyed(bool k)         { _isKeyed = k; }
-    bool isRttyFigs() const       { return _isRttyFigs; }
-    void setRttyFigs(bool f)      { _isRttyFigs = f; }
-    const char* getRxText() const { return _rxText; }
+    int  getMode() const          { return mode; }
+    void setMode(int m)           { mode = m; }
+    bool isBusy() const           { return busy; }
+    void setBusy(bool b)          { busy = b; }
+    bool isKeyed() const          { return keyed; }
+    void setKeyed(bool k)         { keyed = k; }
+    bool getRttyFigs() const      { return isRttyFigs; }
+    void setRttyFigs(bool f)      { isRttyFigs = f; }
+    const char* getRxText() const { return rxText; }
+
+    void setActionType(String type) { lastActionType = type; }
+    String getActionType() const    { return lastActionType; }
 
     void addRxChar(char c) {
         if (xSemaphoreTake(g_mutex, pdMS_TO_TICKS(5))) {
-            if (_rxLen < sizeof(_rxText) - 1) {
-                _rxText[_rxLen++] = c;
-                _rxText[_rxLen]   = '\0';
+            if (rxLen < sizeof(rxText) - 1) {
+                rxText[rxLen++] = c;
+                rxText[rxLen]   = '\0';
             }
             xSemaphoreGive(g_mutex);
         }
@@ -66,8 +70,8 @@ public:
 
     // Returns up to the last n characters of the RX log
     String getLastRxText(int n) const {
-        int start = (_rxLen > n) ? _rxLen - n : 0;
-        return String(_rxText + start);
+        int start = (rxLen > n) ? rxLen - n : 0;
+        return String(rxText + start);
     }
 };
 

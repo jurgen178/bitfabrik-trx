@@ -2,22 +2,22 @@
 
 #include <Arduino.h>
 
-static const char CONFIG_EDITOR_HTML[] PROGMEM = R"html(
+static const char LOG_EDITOR_HTML[] PROGMEM = R"html(
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TRX Band Tabelle</title>
+  <title>TRX Sende Log</title>
   <style>
     html, body { height: 100%; margin: 0; background: #121417; color: white; overflow: hidden; }
     #top { padding: 10px; font-family: sans-serif; background: #1c1f26; border-bottom: 1px solid #2d3748; display: flex; align-items: center; }
     #editor { height: calc(100% - 64px); }
     button { margin-right: 8px; padding: 5px 15px; cursor: pointer; background: #2d3748; border: 1px solid #4a5568; color: white; border-radius: 4px; font-weight: bold; }
     button:hover { background: #4a5568; }
-    .btn-save { background: #00aaff !important; color: white !important; border-color: #00aaff !important; }
+    .btn-save { background: #00ff88 !important; color: #121417 !important; border-color: #00ff88 !important; }
     .btn-danger { background: #e53e3e !important; }
-    #msg { margin-left: auto; font-weight: bold; color: #00aaff; letter-spacing: 1px; }
+    #msg { margin-left: auto; font-weight: bold; color: #00ff88; letter-spacing: 1px; }
   </style>
   <script src="https://unpkg.com/monaco-editor@0.54.0/min/vs/loader.js"></script>
 </head>
@@ -25,12 +25,10 @@ static const char CONFIG_EDITOR_HTML[] PROGMEM = R"html(
   <div id="top">
     <button onclick="location.href='/'">Dashboard</button>
     <button id="btnReload">Reload</button>
-    <button id="btnSave" class="btn-save">Save & Restart</button>
-    <button id="btnReset" class="btn-danger">Reset to Defaults</button>
+    <button id="btnSave" class="btn-save">Save Log</button>
+    <button id="btnReset" class="btn-danger">Clear All</button>
     <button id="btnExport">Export</button>
-    <input type="file" id="fileImport" accept="application/json" style="display:none"/>
-    <button onclick="document.getElementById('fileImport').click()">Import</button>
-    <span id="msg">TRX BAND TABELLE</span>
+    <span id="msg">TRX SENDE LOG</span>
   </div>
   <div id="editor"></div>
 
@@ -47,23 +45,25 @@ static const char CONFIG_EDITOR_HTML[] PROGMEM = R"html(
       document.body.removeChild(a);
     }
 
-    async function reloadConfig() {
+    async function reloadLog() {
       try {
-        const res = await fetch('/bands.json', { cache: 'no-store' });
+        const res = await fetch('/log.json', { cache: 'no-store' });
         if (!res.ok) return;
         const text = await res.text();
         editor.setValue(text);
       } catch (e) { console.error(e); }
     }
 
-    async function saveConfig() {
-      if(!confirm("Änderungen speichern? (Das Gerät startet neu. Bitte lade die Seite danach manuell neu.)")) return;
+    async function saveLog() {
+      if(!confirm("Änderungen im Logbuch speichern?")) return;
       try {
-        await fetch('/bands.json', {
+        const res = await fetch('/log.json', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: editor.getValue()
         });
+        if(res.ok) alert("Log gespeichert.");
+        else alert("Fehler beim Speichern.");
       } catch (e) { console.error(e); }
     }
 
@@ -77,25 +77,22 @@ static const char CONFIG_EDITOR_HTML[] PROGMEM = R"html(
         tabSize: 2
       });
 
-      document.getElementById('btnReload').onclick = reloadConfig;
-      document.getElementById('btnSave').onclick = saveConfig;
-      document.getElementById('btnExport').onclick = () => download('bands.json', editor.getValue());
+      document.getElementById('btnReload').onclick = reloadLog;
+      document.getElementById('btnSave').onclick = saveLog;
+      document.getElementById('btnExport').onclick = () => download('tx_log.json', editor.getValue());
 
       document.getElementById('btnReset').onclick = async () => {
-        if(!confirm("Alle Anpassungen löschen und auf Standardwerte zurücksetzen? (Das Gerät startet neu. Bitte lade die Seite danach manuell neu.)")) return;
+        if(!confirm("Gesamtes Logbuch unwiderruflich löschen?")) return;
         try {
-            await fetch('/bands.json', { method: 'DELETE' });
+            const res = await fetch('/log.json', { method: 'DELETE' });
+            if(res.ok) {
+                editor.setValue('[]');
+                alert("Log gelöscht.");
+            }
         } catch (e) { console.error(e); }
       };
 
-      const fileImport = document.getElementById('fileImport');
-      fileImport.addEventListener('change', async (ev) => {
-        const f = ev.target.files && ev.target.files[0];
-        if (!f) return;
-        editor.setValue(await f.text());
-      });
-
-      reloadConfig();
+      reloadLog();
     });
   </script>
 </body>

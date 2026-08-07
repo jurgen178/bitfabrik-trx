@@ -16,137 +16,81 @@ class RadioEngine
 {
 private:
     // ── Internal State ──
-    volatile long _freq = 7100000L;    // Current VFO frequency in Hz
-    volatile int  _band = 0;           // Active band index (10m by default)
-    volatile bool _usb = false;        // true = USB, false = LSB
-    int  _stepIdx = 1;                 // Index for tuning steps (100Hz default)
+    volatile long freq = 7100000L;    // Current VFO frequency in Hz
+    volatile int  band = 0;           // Active band index (10m by default)
+    volatile bool usb = false;        // true = USB, false = LSB
+    int  stepIdx = 1;                 // Index for tuning steps (100Hz default)
 
-    volatile long _ritOffset = 0;               // Receiver Incremental Tuning offset (Hz)
-    volatile bool _ritEnabled = false;          // RIT toggle
-    double _bfoUsb = 9001500.0;        // Calibrated USB carrier offset
-    double _bfoLsb = 8998500.0;        // Calibrated LSB carrier offset
+    volatile long ritOffset = 0;               // Receiver Incremental Tuning offset (Hz)
+    volatile bool ritEnabled = false;          // RIT toggle
+    double bfoUsb = 9001500.0;        // Calibrated USB carrier offset
+    double bfoLsb = 8998500.0;        // Calibrated LSB carrier offset
 
-    VfoState _vfoA = { 7100000, 3, false, false }; // State for VFO A (40m LSB)
-    VfoState _vfoB = { 14200000, 2, true, false };  // State for VFO B (20m USB)
-    volatile int      _activeVfo = 0;                 // Current selection
-    VfoState  _memChannels[NUM_MEM_CHANNELS]; // Persistent memory slots
-    uint32_t  _memRevision = 0;               // Incremented on every memStore()
-    long _bandFreqs[6];                      // Per-band frequency memory
-    bool _unlockedRange = false;             // Bypasses band limits (for GEN mode)
-    int  _lastRelayBand = -1;                // Cache for I2C efficiency
+    VfoState vfoA = { 7100000, 3, false, false }; // State for VFO A (40m LSB)
+    VfoState vfoB = { 14200000, 2, true, false };  // State for VFO B (20m USB)
+    volatile int      activeVfo = 0;                 // Current selection
+    VfoState  memChannels[NUM_MEM_CHANNELS]; // Persistent memory slots
+    uint32_t  memRevision = 0;               // Incremented on every memStore()
+    long bandFreqs[6];                      // Per-band frequency memory
+    bool unlockedRange = false;             // Bypasses band limits (for GEN mode)
+    int  lastRelayBand = -1;                // Cache for I2C efficiency
 
     // ── VOX Settings ──
-    volatile bool _voxEnabled = false;
-    volatile int  _voxThreshold = 1000;               // ADC threshold (0-4095)
-    volatile int  _voxDelay = 500;                    // Hang time in ms
+    volatile bool voxEnabled = false;
+    volatile int  voxThreshold = 1000;               // ADC threshold (0-4095)
+    volatile int  voxDelay = 500;                    // Hang time in ms
 
     // ── Time & Location ──
-    int  _utcOffset = 1;                     // Hours relative to UTC (e.g. +1 for Germany)
-    bool _dstActive = true;                  // Whether Daylight Saving Time is currently active
+    int  utcOffset = 1;                     // Hours relative to UTC (e.g. +1 for Germany)
+    bool dstActive = true;                  // Whether Daylight Saving Time is currently active
 
 public:
     RadioEngine();
 
     // ── Getters ──
-    long getFrequency() const
-    {
-        return _freq;
-    }
-    int getBand() const
-    {
-        return _band;
-    }
-    bool isUsb() const
-    {
-        return _usb;
-    }
-    int getStepIdx() const
-    {
-        return _stepIdx;
-    }
-    long getRitOffset() const
-    {
-        return _ritOffset;
-    }
-    bool isRitEnabled() const
-    {
-        return _ritEnabled;
-    }
-    double getBfoUsb() const
-    {
-        return _bfoUsb;
-    }
-    double getBfoLsb() const
-    {
-        return _bfoLsb;
-    }
-    int getActiveVfo() const
-    {
-        return _activeVfo;
-    }
-    const VfoState& getVfoA() const
-    {
-        return _vfoA;
-    }
-    const VfoState& getVfoB() const
-    {
-        return _vfoB;
-    }
-    const VfoState* getMemChannels() const
-    {
-        return _memChannels;
-    }
-    bool isMemOccupied(int ch) const
-    {
-        return (ch >= 0 && ch < NUM_MEM_CHANNELS) && _memChannels[ch].occupied;
-    }
-    uint32_t getMemRevision() const { return _memRevision; }
-    const long* getBandFreqs() const
-    {
-        return _bandFreqs;
-    }
+    long getFrequency() const { return freq; }
+    int getBand() const { return band; }
+    bool isUsb() const { return usb; }
+    int getStepIdx() const { return stepIdx; }
+    long getRitOffset() const { return ritOffset; }
+    bool isRitEnabled() const { return ritEnabled; }
+    double getBfoUsb() const { return bfoUsb; }
+    double getBfoLsb() const { return bfoLsb; }
+    int getActiveVfo() const { return activeVfo; }
+    const VfoState& getVfoA() const { return vfoA; }
+    const VfoState& getVfoB() const { return vfoB; }
+    const VfoState* getMemChannels() const { return memChannels; }
+    bool isMemOccupied(int ch) const { return (ch >= 0 && ch < NUM_MEM_CHANNELS) && memChannels[ch].occupied; }
+    uint32_t getMemRevision() const { return memRevision; }
+    const long* getBandFreqs() const { return bandFreqs; }
 
     // ── Setters ──
-    void setFrequency(long f);
-    void setStepIdx(int idx);
-    void setRitEnabled(bool en);
-    void setRitOffset(long offset);
-    void setBfoUsb(double f)
-    {
-        _bfoUsb = f;
-        updateBFO();
-    }
-    void setBfoLsb(double f)
-    {
-        _bfoLsb = f;
-        updateBFO();
-    }
-    void setUsb(bool usb)
-    {
-        _usb = usb;
-        updateBFO();
-        updateLO();
-        g_guiNeedsUpdate = true;
-    }
+    void setFrequency(long newFreq);
+    void setStepIdx(int newIdx);
+    void setRitEnabled(bool enabled);
+    void setRitOffset(long newOffset);
+    void setBfoUsb(double newBfo);
+    void setBfoLsb(double newBfo);
+    void setUsb(bool newUsb);
 
     void setUnlockedRange(bool en);
-    bool isUnlocked() const { return _unlockedRange; }
+    bool isUnlocked() const { return unlockedRange; }
 
     long getMinFreq() const;
     long getMaxFreq() const;
 
     // ── VOX Control ──
-    bool isVoxEnabled() const { return _voxEnabled; }
+    bool isVoxEnabled() const { return voxEnabled; }
     void setVoxEnabled(bool en);
-    int  getVoxThreshold() const { return _voxThreshold; }
+    int  getVoxThreshold() const { return voxThreshold; }
     void setVoxThreshold(int val);
-    int  getVoxDelay() const { return _voxDelay; }
+    int  getVoxDelay() const { return voxDelay; }
     void setVoxDelay(int ms);
 
     // ── Time & Location ──
-    int  getUtcOffset() const { return _utcOffset; }
+    int  getUtcOffset() const { return utcOffset; }
     void setUtcOffset(int hours);
-    bool isDstActive() const { return _dstActive; }
+    bool isDstActive() const { return dstActive; }
     void setDstActive(bool active);
 
     // ── Logic Methods ──
@@ -172,10 +116,10 @@ public:
 
 private:
     // Internal hardware-near methods (must be called with g_hwMutex held!)
-    void _updateLOInternal();
-    void _updateBFOInternal();
-    void _updateBandRelaysInternal(int oldIdx, int newIdx);
-    void _selectBandInternal(int idx);
+    void updateLOInternal();
+    void updateBFOInternal();
+    void updateBandRelaysInternal(int oldIdx, int newIdx);
+    void selectBandInternal(int idx);
 };
 
 extern RadioEngine radio;

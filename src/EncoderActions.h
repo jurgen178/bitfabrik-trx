@@ -88,31 +88,25 @@ enum EncoderMode;
 class EncoderManager
 {
 private:
-    EncoderHandler* _currentHandler = nullptr;
-    TuneHandler _tune;
-    VolumeHandler _vol;
-    PowerHandler _power;
-    MicGainHandler _mic;
-    CalibrateHandler _cal;
-    RitHandler _rit;
-    EncoderMode _mode;
-    unsigned long _lastActivity = 0;
+    EncoderHandler* currentHandler = nullptr;
+    TuneHandler tune;
+    VolumeHandler vol;
+    PowerHandler power;
+    MicGainHandler mic;
+    CalibrateHandler cal;
+    RitHandler rit;
+    EncoderMode mode;
+    unsigned long lastActivity = 0;
 
 public:
     EncoderManager();
     void begin();
-    void setMode(EncoderMode mode);
+    void setMode(EncoderMode newMode);
     void cycleMode();
     void handleRotation(int delta);
     void checkTimeout();
-    EncoderHandler* getHandler()
-    {
-        return _currentHandler;
-    }
-    EncoderMode getMode()
-    {
-        return _mode;
-    }
+    EncoderHandler* getHandler() { return currentHandler; }
+    EncoderMode getMode() { return mode; }
 };
 
 extern EncoderManager encManager;

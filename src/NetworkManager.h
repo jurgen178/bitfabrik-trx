@@ -12,17 +12,17 @@
 class NetworkManager
 {
 private:
-    AsyncWebServer _server;
-    AsyncWebSocket _ws;
-    AsyncEventSource _sse;
+    AsyncWebServer server;
+    AsyncWebSocket ws;
+    AsyncEventSource sse;
 
-    unsigned long _lastWsCleanup = 0;
-    uint32_t _workTimeAccum = 0;
-    unsigned long _lastStatsTime = 0;
+    unsigned long lastWsCleanup = 0;
+    uint32_t workTimeAccum = 0;
+    unsigned long lastStatsTime = 0;
 
-    void _setupRoutes();
-    String _buildStatusJson();
-    void _onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
+    void setupRoutes();
+    void buildStatusJson(String& json);
+    void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 
 public:
     NetworkManager();

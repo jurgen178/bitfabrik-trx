@@ -65,8 +65,8 @@ enum class DisplayMode {
 class AppMode
 {
 protected:
-    void _drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode = true);
-    void _drawFullPageHeader(const char* label, uint16_t color, bool showBackButton = true);
+    void drawFrequency(LGFX_Sprite& canvas, long freq, bool usb, bool showMode = true);
+    void drawFullPageHeader(const char* label, uint16_t color, bool showBackButton = true);
 
 public:
     virtual ~AppMode() {}
@@ -94,7 +94,7 @@ public:
 
 class ParamMode : public AppMode {
 protected:
-    void _drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color);
+    void drawBar(LGFX_Sprite& canvas, const char* label, int val, uint16_t color);
 public:
     void handleTouch(int x, int y, bool longPress) override;
     void onRotate(int delta) override;
@@ -130,21 +130,21 @@ public:
 class DisplayController
 {
 private:
-    LGFX_Sprite _topCanvas;
-    UIState _last;
-    AppMode* _currentMode = nullptr;
-    AppMode* _previousMode = nullptr;
-    uint32_t _modeTimeout = 0;
-    bool _initialized = false;
+    LGFX_Sprite topCanvas;
+    UIState last;
+    AppMode* currentMode = nullptr;
+    AppMode* previousMode = nullptr;
+    uint32_t modeTimeout = 0;
+    bool initialized = false;
 
     // Mode instances
-    class RadioMode* _radioMode;
-    class GeneratorMode* _genMode;
-    class SettingsMode* _settingsMode;
-    class RitMode* _ritMode;
-    class VolumeMode* _volMode;
-    class PowerMode* _pwrMode;
-    class MicMode* _micMode;
+    class RadioMode* radioMode;
+    class GeneratorMode* genMode;
+    class SettingsMode* settingsMode;
+    class RitMode* ritMode;
+    class VolumeMode* volMode;
+    class PowerMode* pwrMode;
+    class MicMode* micMode;
 
 public:
     DisplayController();
@@ -154,11 +154,11 @@ public:
 
     // Mode Management
     void setMode(DisplayMode mode);
-    AppMode* getCurrentMode() { return _currentMode; }
+    AppMode* getCurrentMode() { return currentMode; }
     void checkTimeout();
 
-    LGFX_Sprite& getCanvas() { return _topCanvas; }
-    UIState& getLastState() { return _last; }
+    LGFX_Sprite& getCanvas() { return topCanvas; }
+    UIState& getLastState() { return last; }
 };
 
 extern DisplayController ui;
