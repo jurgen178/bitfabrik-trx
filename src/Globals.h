@@ -72,7 +72,7 @@ public:
 
 struct Band
 {
-  const char* name;       // Anzeige-Name (z.B. "40m")
+  char        name[16];   // Anzeige-Name (z.B. "40m")
   long        freqMin;    // Untere Grenze für diesen Filter
   long        freqMax;    // Obere Grenze für diesen Filter
   long        freqDefault;// Startfrequenz

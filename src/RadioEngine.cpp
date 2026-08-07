@@ -266,10 +266,11 @@ void RadioEngine::loadBandsFromJson()
     for (int i = 0; i < array.size() && i < NUM_BANDS; i++) {
         JsonObject obj = array[i];
 
-        // Safety: If band name was changed via JSON, we need to handle the string memory
+        // Safety: If band name was changed via JSON, we update the buffer
         const char* newName = obj["id"] | BANDS[i].name;
         if (strcmp(newName, BANDS[i].name) != 0) {
-            BANDS[i].name = strdup(newName);
+            strncpy(BANDS[i].name, newName, sizeof(BANDS[i].name) - 1);
+            BANDS[i].name[sizeof(BANDS[i].name) - 1] = '\0';
         }
 
         BANDS[i].freqMin     = obj["min"] | BANDS[i].freqMin;
